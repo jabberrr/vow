@@ -8,54 +8,74 @@
 
 /* Begin PBXBuildFile section */
 		02B70C4301DC2489F2060AE5 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96921F7362907C14D7AE60D7 /* Models.swift */; };
+		02DDDD53D9968D2CADA8201B /* OrbTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = A81F3BD4E112BA660EC48BF0 /* OrbTiming.swift */; };
 		1AB0A0AD8F77F329F7AF0443 /* VowStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78CB0892C51F8DFCC1C0D03D /* VowStore.swift */; };
 		1EF762F90E39EE19F0C08A1B /* PotCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C88AF75DA27EA96C1AF727 /* PotCard.swift */; };
 		1F24252A6F539632BA48BC01 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E99C70B2A5469912F19806B /* OnboardingView.swift */; };
+		2A5B4BBC33611CE5B6E2DEB1 /* OrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D2514E4B8D722C61D068D0D /* OrbView.swift */; };
 		2A7B4A8ED0691A120F93183D /* AmbientBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4AABEF1276EC6B06E4A95CE /* AmbientBackground.swift */; };
 		2CFA91AD814BF844AEED7363 /* GlyphModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A944BAEBEB77FD336E059C05 /* GlyphModel.swift */; };
 		30DC02D35C3FE2D474C87989 /* HeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8330209D9DAC8045F9712DC1 /* HeaderView.swift */; };
 		3626F9DFB582D6CBD6F91E00 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222BE1C655E211E9DC92163F /* Theme.swift */; };
+		376C32DF8A7620141B5DED95 /* SealedOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E9825161DDA7FB20285A617 /* SealedOrb.swift */; };
 		3ECDA055605D0EF087904C8F /* DemoBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB97E01F573A2D9E99A1591F /* DemoBar.swift */; };
 		40612136DF6902CED4BF4B95 /* LedgerCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984AFEDE6036BC211C7A3E81 /* LedgerCard.swift */; };
+		54AD128089C1EB2C127293EB /* ActiveOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D732C82FE045289D27DFF8 /* ActiveOrb.swift */; };
+		5FDC8D4E7287BF8B121E3113 /* OrbAura.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62CBAC1C4381A1B63CE24B24 /* OrbAura.swift */; };
 		67DA64EE3D58ED70885BADB8 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E27F18A9B2A01EDA0445C8A /* MainView.swift */; };
 		7D3556CC7C936B7324615D80 /* Creeds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A59FE7E628F75DD144AE119 /* Creeds.swift */; };
+		7FDB57C5626B73C3EA1A8EAE /* OrbHoldController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A3F7B13A94FEAEB595306B /* OrbHoldController.swift */; };
 		8856A2E660FD75135A134D85 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB2816BA3D5E234430B9085 /* Glass.swift */; };
 		8B05E32370926701E7645150 /* GlyphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1594605FB516E071A5C08F6D /* GlyphView.swift */; };
+		8DD005B848DF527A0C11CAC2 /* SoundEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518C88409DAF5D72DA61536E /* SoundEngine.swift */; };
 		91F2FCDC36307522D1BDBB65 /* Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04738B8BF27FD774D93235CB /* Persistence.swift */; };
 		9C564898F08CCE86C075B658 /* VowCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8431A4965DA3834ACEA3F51 /* VowCard.swift */; };
 		9F70B11DA2B3E14436DCC7F6 /* CrewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E53685CEB882ABAF68CACEE /* CrewCard.swift */; };
 		B42B66CD0DC061ACE2F8247C /* StreakCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2169C4172E525E3B1CD8CB99 /* StreakCard.swift */; };
+		BB2E3659C67513BB071AF360 /* OrbRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A206578705C21A48FF6B16FD /* OrbRing.swift */; };
+		BE64A106CE8AC0480AB1D3D4 /* OrbBody.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F7A8D024C030387668DFF9 /* OrbBody.swift */; };
 		C89BDB7D6BB77FBD3468597E /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D4B12A11FF03A627058253 /* RootView.swift */; };
 		D0B02DA4E9D6B85022377D58 /* DailySeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AC75B9434D908C493BD10B5 /* DailySeed.swift */; };
 		E5BDFA6CF6D3E61FC1D676F2 /* Toast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66F921CBB2B69673915B432F /* Toast.swift */; };
 		EE45A77CD0AB4AD3D011F4A3 /* VowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75BA2427F6CD1A89B6ABF428 /* VowApp.swift */; };
 		F4A01C2D4CE2EE913AD248DA /* CreedLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88FB809841E3C5E3C72B8AB8 /* CreedLine.swift */; };
+		F87F91142D400DD7D27B5E3A /* OrbBurst.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		04738B8BF27FD774D93235CB /* Persistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence.swift; sourceTree = "<group>"; };
+		0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbBurst.swift; sourceTree = "<group>"; };
 		1594605FB516E071A5C08F6D /* GlyphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphView.swift; sourceTree = "<group>"; };
 		1A59FE7E628F75DD144AE119 /* Creeds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Creeds.swift; sourceTree = "<group>"; };
 		1F23508D6A1B77BC2B4B25A0 /* Vow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vow.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2169C4172E525E3B1CD8CB99 /* StreakCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreakCard.swift; sourceTree = "<group>"; };
 		222BE1C655E211E9DC92163F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		2D2514E4B8D722C61D068D0D /* OrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbView.swift; sourceTree = "<group>"; };
 		2E27F18A9B2A01EDA0445C8A /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		2E53685CEB882ABAF68CACEE /* CrewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewCard.swift; sourceTree = "<group>"; };
+		518C88409DAF5D72DA61536E /* SoundEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundEngine.swift; sourceTree = "<group>"; };
 		5AB2816BA3D5E234430B9085 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
+		62CBAC1C4381A1B63CE24B24 /* OrbAura.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbAura.swift; sourceTree = "<group>"; };
 		66F921CBB2B69673915B432F /* Toast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Toast.swift; sourceTree = "<group>"; };
+		6E9825161DDA7FB20285A617 /* SealedOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SealedOrb.swift; sourceTree = "<group>"; };
 		75BA2427F6CD1A89B6ABF428 /* VowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VowApp.swift; sourceTree = "<group>"; };
 		76D4B12A11FF03A627058253 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		78CB0892C51F8DFCC1C0D03D /* VowStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VowStore.swift; sourceTree = "<group>"; };
+		80F7A8D024C030387668DFF9 /* OrbBody.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbBody.swift; sourceTree = "<group>"; };
 		8330209D9DAC8045F9712DC1 /* HeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderView.swift; sourceTree = "<group>"; };
 		88FB809841E3C5E3C72B8AB8 /* CreedLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreedLine.swift; sourceTree = "<group>"; };
 		8AC75B9434D908C493BD10B5 /* DailySeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailySeed.swift; sourceTree = "<group>"; };
 		8E99C70B2A5469912F19806B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		96921F7362907C14D7AE60D7 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		984AFEDE6036BC211C7A3E81 /* LedgerCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LedgerCard.swift; sourceTree = "<group>"; };
+		A1A3F7B13A94FEAEB595306B /* OrbHoldController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbHoldController.swift; sourceTree = "<group>"; };
+		A206578705C21A48FF6B16FD /* OrbRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbRing.swift; sourceTree = "<group>"; };
+		A81F3BD4E112BA660EC48BF0 /* OrbTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbTiming.swift; sourceTree = "<group>"; };
 		A944BAEBEB77FD336E059C05 /* GlyphModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphModel.swift; sourceTree = "<group>"; };
 		B9C88AF75DA27EA96C1AF727 /* PotCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PotCard.swift; sourceTree = "<group>"; };
 		C8431A4965DA3834ACEA3F51 /* VowCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VowCard.swift; sourceTree = "<group>"; };
 		E4AABEF1276EC6B06E4A95CE /* AmbientBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientBackground.swift; sourceTree = "<group>"; };
+		F5D732C82FE045289D27DFF8 /* ActiveOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveOrb.swift; sourceTree = "<group>"; };
 		FB97E01F573A2D9E99A1591F /* DemoBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -89,6 +109,14 @@
 				1594605FB516E071A5C08F6D /* GlyphView.swift */,
 			);
 			path = Glyph;
+			sourceTree = "<group>";
+		};
+		52FAC414088AD9D93CEA7C03 /* Sound */ = {
+			isa = PBXGroup;
+			children = (
+				518C88409DAF5D72DA61536E /* SoundEngine.swift */,
+			);
+			path = Sound;
 			sourceTree = "<group>";
 		};
 		5B38CC909DA78294FEF9EFD4 /* Cards */ = {
@@ -132,6 +160,8 @@
 				5B38CC909DA78294FEF9EFD4 /* Cards */,
 				2849E551EF560729EDF55B7B /* Glyph */,
 				C253607F97F0E70A44C95F33 /* Onboarding */,
+				BF72872D049A50A5988560DF /* Orb */,
+				52FAC414088AD9D93CEA7C03 /* Sound */,
 				90EC4E3E616B0A6208E2CBBC /* Store */,
 				CEC991BFB144607DF77426D2 /* Theme */,
 			);
@@ -144,6 +174,22 @@
 				A2A50538E928978038167FC0 /* Vow */,
 				5FB69639CFD1339773BBE807 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		BF72872D049A50A5988560DF /* Orb */ = {
+			isa = PBXGroup;
+			children = (
+				F5D732C82FE045289D27DFF8 /* ActiveOrb.swift */,
+				62CBAC1C4381A1B63CE24B24 /* OrbAura.swift */,
+				80F7A8D024C030387668DFF9 /* OrbBody.swift */,
+				0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */,
+				A1A3F7B13A94FEAEB595306B /* OrbHoldController.swift */,
+				A206578705C21A48FF6B16FD /* OrbRing.swift */,
+				A81F3BD4E112BA660EC48BF0 /* OrbTiming.swift */,
+				2D2514E4B8D722C61D068D0D /* OrbView.swift */,
+				6E9825161DDA7FB20285A617 /* SealedOrb.swift */,
+			);
+			path = Orb;
 			sourceTree = "<group>";
 		};
 		C253607F97F0E70A44C95F33 /* Onboarding */ = {
@@ -249,6 +295,16 @@
 				2CFA91AD814BF844AEED7363 /* GlyphModel.swift in Sources */,
 				8B05E32370926701E7645150 /* GlyphView.swift in Sources */,
 				1F24252A6F539632BA48BC01 /* OnboardingView.swift in Sources */,
+				54AD128089C1EB2C127293EB /* ActiveOrb.swift in Sources */,
+				5FDC8D4E7287BF8B121E3113 /* OrbAura.swift in Sources */,
+				BE64A106CE8AC0480AB1D3D4 /* OrbBody.swift in Sources */,
+				F87F91142D400DD7D27B5E3A /* OrbBurst.swift in Sources */,
+				7FDB57C5626B73C3EA1A8EAE /* OrbHoldController.swift in Sources */,
+				BB2E3659C67513BB071AF360 /* OrbRing.swift in Sources */,
+				02DDDD53D9968D2CADA8201B /* OrbTiming.swift in Sources */,
+				2A5B4BBC33611CE5B6E2DEB1 /* OrbView.swift in Sources */,
+				376C32DF8A7620141B5DED95 /* SealedOrb.swift in Sources */,
+				8DD005B848DF527A0C11CAC2 /* SoundEngine.swift in Sources */,
 				02B70C4301DC2489F2060AE5 /* Models.swift in Sources */,
 				91F2FCDC36307522D1BDBB65 /* Persistence.swift in Sources */,
 				1AB0A0AD8F77F329F7AF0443 /* VowStore.swift in Sources */,
