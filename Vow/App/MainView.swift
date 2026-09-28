@@ -98,5 +98,6 @@ private struct MainColumn: View {
             .frame(width: 220, height: 220)
             .id("\(state.cycle)-\(state.day)")
             .frame(maxWidth: .infinity)
+            .zIndex(1)
     }
 }
