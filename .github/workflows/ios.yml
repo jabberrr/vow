@@ -1,0 +1,91 @@
+name: iOS build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (committed Vow.xcodeproj)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode 16
+        run: |
+          XC="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$XC" ]; then
+            echo "Selecting $XC"
+            sudo xcode-select -s "$XC/Contents/Developer"
+          else
+            echo "::warning::No /Applications/Xcode_16*.app found; using default $(xcode-select -p)"
+          fi
+          xcodebuild -version
+
+      - name: Build for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Vow.xcodeproj \
+            -scheme Vow \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee build.log
+
+      - name: Show compiler errors
+        if: failure()
+        run: grep -nE "(error|fatal error):" build.log | head -100 || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Check committed project is up to date with gen_xcodeproj.py
+        continue-on-error: true
+        run: |
+          python3 scripts/gen_xcodeproj.py
+          git diff --stat --exit-code -- Vow.xcodeproj
+
+  xcodegen:
+    name: Build (xcodegen from project.yml, non-blocking)
+    runs-on: macos-15
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode 16
+        run: |
+          XC="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC/Contents/Developer"; fi
+          xcodebuild -version
+
+      - name: Generate project with XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Vow.xcodeproj \
+            -scheme Vow \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee build-xcodegen.log
