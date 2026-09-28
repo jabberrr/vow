@@ -91,8 +91,9 @@ final class OrbHoldController {
         burstStart = nil
     }
 
-    /// onDisappear: cancel everything pending. A completed-but-not-yet-delivered seal is
-    /// delivered now rather than lost (still exactly once, guarded by `didSeal`).
+    /// onDisappear: cancel everything pending, including a completed-but-not-yet-delivered seal.
+    /// The orb only disappears when the day changes (`.id(cycle-day)`) or on Reset; delivering
+    /// the seal then would seal the NEW day (onSealed is `{ store.seal() }`), so it is dropped.
     func teardown() {
         completeWork?.cancel()
         completeWork = nil
@@ -107,10 +108,7 @@ final class OrbHoldController {
 
         sealWork?.cancel()
         sealWork = nil
-        if let seal = pendingSeal {
-            pendingSeal = nil
-            deliverSeal(seal)
-        }
+        pendingSeal = nil
     }
 
     // MARK: - Completion (runs from the DispatchWorkItem, main thread)
