@@ -69,5 +69,9 @@ struct OnboardingView: View {
     private func submit() {
         guard canContinue else { return }
         store.saveProfile(displayName: trimmedName)
+        // After "Reset local data" the cache is empty: reload groups from iCloud right away.
+        if store.groupIDs.isEmpty {
+            Task { await store.refreshAll() }
+        }
     }
 }

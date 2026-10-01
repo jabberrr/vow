@@ -181,6 +181,16 @@ final class AppStore {
         for (id, s) in snapshots where !listed.contains(id) && !keysAtStart.contains(id) {
             fresh[id] = s
         }
+        // Drop groups removed locally (leave/delete/reset) while this refresh was running.
+        for id in keysAtStart where snapshots[id] == nil {
+            fresh[id] = nil
+        }
+        // Re-merge with the current state: check-ins saved while the fetches were running must survive.
+        for (id, s) in fresh {
+            if let current = snapshots[id] {
+                fresh[id] = merged(s, previous: current)
+            }
+        }
 
         snapshots = fresh
         if let p = pendingVowPrompt, fresh[p] == nil {
@@ -519,11 +529,13 @@ final class AppStore {
 
     // MARK: - Local state helpers
 
-    /// Keeps optimistic (pending, still being saved) check-ins the server doesn't know about yet.
+    /// Keeps optimistic (pending, still being saved) check-ins the server doesn't know about yet, and
+    /// server-confirmed check-ins a fetch that started before their save didn't see. Check-in records are
+    /// never deleted (resets bump the epoch), so a confirmed one can always be kept.
     private func merged(_ incoming: GroupSnapshot, previous: GroupSnapshot?) -> GroupSnapshot {
         guard let prev = previous else { return incoming }
         var out: GroupSnapshot = incoming
-        for c in prev.checkIns where c.serverDate == nil && inFlightCheckIns.contains(c) {
+        for c in prev.checkIns where c.serverDate != nil || inFlightCheckIns.contains(c) {
             let known: Bool = out.checkIns.contains(where: {
                 $0.userID == c.userID && $0.day == c.day && $0.epoch == c.epoch
             })

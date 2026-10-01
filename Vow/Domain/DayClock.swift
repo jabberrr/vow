@@ -20,8 +20,10 @@ enum DayClock {
     /// time zone. DST-safe (counts calendar days, not 24-hour blocks). Never negative.
     static func dayIndex(of date: Date, start: Date, timeZoneID: String) -> Int {
         let cal: Calendar = calendar(timeZoneID)
-        let from: Date = cal.startOfDay(for: start)
-        let to: Date = cal.startOfDay(for: date)
+        // Noon anchors: midnight doesn't exist on DST days in some zones (startOfDay is 01:00 there),
+        // which would make a start-of-day to start-of-day span only 23 wall-clock hours (= 0 days).
+        let from: Date = cal.date(bySettingHour: 12, minute: 0, second: 0, of: start) ?? cal.startOfDay(for: start)
+        let to: Date = cal.date(bySettingHour: 12, minute: 0, second: 0, of: date) ?? cal.startOfDay(for: date)
         let days: Int = cal.dateComponents([.day], from: from, to: to).day ?? 0
         return max(0, days)
     }
@@ -41,7 +43,8 @@ enum DayClock {
         }
         let cal: Calendar = calendar(group.timeZoneID)
         let today: Date = cal.startOfDay(for: now)
-        return cal.date(byAdding: .day, value: 1, to: today)
+        guard let next: Date = cal.date(byAdding: .day, value: 1, to: today) else { return nil }
+        return cal.startOfDay(for: next)
     }
 
     /// Start of group day `day` (day 0 = creation day) in the group's time zone.
