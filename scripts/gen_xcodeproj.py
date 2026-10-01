@@ -9,7 +9,9 @@ below to match (and vice versa).
 
 What it does:
   * walks <root>/Vow recursively and adds every *.swift file to the Vow target
-    (groups mirror folders; hidden files and non-Swift files are ignored),
+    (groups mirror folders), every *.xcassets catalog to its Resources phase,
+    and Info.plist as a plain reference (it is INFOPLIST_FILE, never copied);
+    hidden files and anything else are ignored,
   * writes Vow.xcodeproj/project.pbxproj, the embedded workspace, the
     IDEWorkspaceChecks.plist, and the shared `Vow` scheme,
   * derives every object ID from an md5 of a stable role/path string, so
@@ -43,18 +45,13 @@ OBJECT_VERSION = "56"
 COMPATIBILITY_VERSION = "Xcode 14.0"
 
 TARGET_SETTINGS = {
-    "ASSETCATALOG_COMPILER_APPICON_NAME": "",
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     "CODE_SIGN_STYLE": "Automatic",
     "CURRENT_PROJECT_VERSION": "1",
     "DEVELOPMENT_TEAM": "",
     "ENABLE_PREVIEWS": "YES",
-    "GENERATE_INFOPLIST_FILE": "YES",
-    "INFOPLIST_KEY_CFBundleDisplayName": "Vow",
-    "INFOPLIST_KEY_UIApplicationSceneManifest_Generation": "YES",
-    "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents": "YES",
-    "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",
-    "INFOPLIST_KEY_UISupportedInterfaceOrientations": "UIInterfaceOrientationPortrait",
-    "INFOPLIST_KEY_UIUserInterfaceStyle": "Dark",
+    "GENERATE_INFOPLIST_FILE": "NO",
+    "INFOPLIST_FILE": "Vow/Info.plist",
     "IPHONEOS_DEPLOYMENT_TARGET": DEPLOYMENT_TARGET,
     "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/Frameworks"],
     "MARKETING_VERSION": "1.0",
@@ -187,6 +184,7 @@ class Node(object):
         self.rel = rel       # path relative to root, posix
         self.groups = []     # [Node]
         self.files = []      # [rel path of .swift]
+        self.extras = []     # [(rel path, lastKnownFileType, in Resources phase)]
 
 
 def scan(root):
@@ -202,19 +200,23 @@ def scan(root):
                 continue
             p = os.path.join(abs_dir, entry)
             r = rel + "/" + entry
-            if os.path.isdir(p) and not entry.endswith((".xcassets", ".bundle", ".xcodeproj")):
+            if os.path.isdir(p) and entry.endswith(".xcassets"):
+                node.extras.append((r, "folder.assetcatalog", True))
+            elif os.path.isdir(p) and not entry.endswith((".bundle", ".xcodeproj")):
                 child = walk(p, r)
-                if child.files or child.groups:
+                if child.files or child.groups or child.extras:
                     node.groups.append(child)
             elif os.path.isfile(p) and entry.endswith(".swift"):
                 node.files.append(r)
+            elif os.path.isfile(p) and entry == "Info.plist":
+                node.extras.append((r, "text.plist.xml", False))
             else:
                 skipped.append(r)
         return node
 
     tree = walk(src, SOURCE_DIR)
     for s in skipped:
-        sys.stderr.write("note: not added to project (not a .swift file): %s\n" % s)
+        sys.stderr.write("note: not added to project: %s\n" % s)
     return tree
 
 
@@ -222,6 +224,13 @@ def all_files(node):
     out = list(node.files)
     for g in node.groups:
         out.extend(all_files(g))
+    return out
+
+
+def all_extras(node):
+    out = list(node.extras)
+    for g in node.groups:
+        out.extend(all_extras(g))
     return out
 
 
@@ -262,8 +271,12 @@ def build_pbxproj(tree):
     tgt_debug = oid("config", "target", TARGET_NAME, "Debug")
     tgt_release = oid("config", "target", TARGET_NAME, "Release")
 
+    extras = all_extras(tree)
+    resources = [r for r, _, in_res in extras if in_res]
     file_ref = {f: oid("fileref", f) for f in files}
+    file_ref.update({r: oid("fileref", r) for r, _, _ in extras})
     build_file = {f: oid("buildfile", "sources", f) for f in files}
+    res_build_file = {r: oid("buildfile", "resources", r) for r in resources}
 
     def base(f):
         return f.rsplit("/", 1)[-1]
@@ -284,6 +297,9 @@ def build_pbxproj(tree):
     for f in sorted(files, key=lambda f: build_file[f]):
         a("\t\t%s /* %s in Sources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
           % (build_file[f], cmt(base(f)), file_ref[f], cmt(base(f))))
+    for r in sorted(resources, key=lambda r: res_build_file[r]):
+        a("\t\t%s /* %s in Resources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
+          % (res_build_file[r], cmt(base(r)), file_ref[r], cmt(base(r))))
     a("/* End PBXBuildFile section */")
     a("")
 
@@ -293,6 +309,10 @@ def build_pbxproj(tree):
              "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = %s; sourceTree = %s; };"
              % (file_ref[f], cmt(base(f)), q(base(f)), q("<group>")))
             for f in files]
+    refs += [(file_ref[r],
+              "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = %s; path = %s; sourceTree = %s; };"
+              % (file_ref[r], cmt(base(r)), q(ftype), q(base(r)), q("<group>")))
+             for r, ftype, _ in extras]
     refs.append((product_ref,
                  "\t\t%s /* %s */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = %s; sourceTree = BUILT_PRODUCTS_DIR; };"
                  % (product_ref, cmt(PRODUCT_FILE), q(PRODUCT_FILE))))
@@ -334,6 +354,7 @@ def build_pbxproj(tree):
     def walk_groups(node):
         children = [(group_id(g), g.name) for g in node.groups]
         children += [(file_ref[f], base(f)) for f in node.files]
+        children += [(file_ref[r], base(r)) for r, _, _ in node.extras]
         emit_group(group_id(node), children,
                    {"comment": " /* %s */" % cmt(node.name),
                     "props": [("path", q(node.name)), ("sourceTree", q("<group>"))]})
@@ -416,6 +437,8 @@ def build_pbxproj(tree):
     a("\t\t\tisa = PBXResourcesBuildPhase;")
     a("\t\t\tbuildActionMask = 2147483647;")
     a("\t\t\tfiles = (")
+    for r in resources:
+        a("\t\t\t\t%s /* %s in Resources */," % (res_build_file[r], cmt(base(r))))
     a("\t\t\t);")
     a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
     a("\t\t};")

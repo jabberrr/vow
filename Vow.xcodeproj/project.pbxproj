@@ -40,6 +40,7 @@
 		EE45A77CD0AB4AD3D011F4A3 /* VowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75BA2427F6CD1A89B6ABF428 /* VowApp.swift */; };
 		F4A01C2D4CE2EE913AD248DA /* CreedLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88FB809841E3C5E3C72B8AB8 /* CreedLine.swift */; };
 		F87F91142D400DD7D27B5E3A /* OrbBurst.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */; };
+		87DC4671DA2F1B65DED3ECDE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F383108C23FD2CB78E2E7B6F /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -74,7 +75,9 @@
 		A944BAEBEB77FD336E059C05 /* GlyphModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphModel.swift; sourceTree = "<group>"; };
 		B9C88AF75DA27EA96C1AF727 /* PotCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PotCard.swift; sourceTree = "<group>"; };
 		C8431A4965DA3834ACEA3F51 /* VowCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VowCard.swift; sourceTree = "<group>"; };
+		DCC42F99EBAFEEB1D4940E77 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E4AABEF1276EC6B06E4A95CE /* AmbientBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientBackground.swift; sourceTree = "<group>"; };
+		F383108C23FD2CB78E2E7B6F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F5D732C82FE045289D27DFF8 /* ActiveOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveOrb.swift; sourceTree = "<group>"; };
 		FB97E01F573A2D9E99A1591F /* DemoBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -164,6 +167,8 @@
 				52FAC414088AD9D93CEA7C03 /* Sound */,
 				90EC4E3E616B0A6208E2CBBC /* Store */,
 				CEC991BFB144607DF77426D2 /* Theme */,
+				F383108C23FD2CB78E2E7B6F /* Assets.xcassets */,
+				DCC42F99EBAFEEB1D4940E77 /* Info.plist */,
 			);
 			path = Vow;
 			sourceTree = "<group>";
@@ -268,6 +273,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				87DC4671DA2F1B65DED3ECDE /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -436,18 +442,13 @@
 		9286993EE62643210C76A2BA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Vow;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vow/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -466,18 +467,13 @@
 		E30CE0BA93CADB5C3D372915 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Vow;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vow/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
