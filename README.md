@@ -6,7 +6,7 @@ Vow is a small iOS 17 SwiftUI app about keeping one promise a day. You pick a da
 
 - Xcode 16 or later
 - An iOS 17 (or newer) simulator
-- No third-party dependencies, asset catalogs or resource files
+- No third-party dependencies; the only resources are `Vow/Info.plist` and the app icon in `Vow/Assets.xcassets`
 
 ## Run
 
@@ -21,6 +21,13 @@ To regenerate the project:
 
 After you add, rename or delete a Swift file, run one of these commands.
 
+## Archive / TestFlight
+
+1. In Xcode, select the **Vow** target → **Signing & Capabilities**, pick your **Team**, and change the bundle identifier from the placeholder `com.example.vow` to one you own.
+2. Choose **Any iOS Device (arm64)** as the destination, then **Product → Archive**.
+
+The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`) and a single 1024×1024 app icon in `Vow/Assets.xcassets/AppIcon.appiconset`; Xcode generates the smaller sizes.
+
 ## Layout
 
 ```
@@ -33,6 +40,8 @@ Vow/
   Sound/       SoundEngine: build-up tone and a pop when you check in
   Onboarding/  Choose your vow, crew and stake
   Cards/       Header, vow, creed, streak, crew, pot and ledger cards, the demo bar, and the toast
+  Info.plist   App metadata (display name, icon, launch screen, portrait, dark)
+  Assets.xcassets  App icon
 project.yml               XcodeGen spec
 scripts/gen_xcodeproj.py  Python generator for Vow.xcodeproj that doesn't need XcodeGen
 ```

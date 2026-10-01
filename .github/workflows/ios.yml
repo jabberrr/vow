@@ -41,6 +41,23 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build | tee build.log
 
+      - name: Archive for device (unsigned) and check the app icon
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Vow.xcodeproj \
+            -scheme Vow \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/Vow.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive | tee -a build.log
+          APP="$RUNNER_TEMP/Vow.xcarchive/Products/Applications/Vow.app"
+          test -f "$APP/Assets.car"
+          plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw "$APP/Info.plist" | grep -qx AppIcon
+          plutil -extract CFBundleDisplayName raw "$APP/Info.plist" | grep -qx Vow
+          echo "Archive OK: icon compiled, Info.plist has CFBundleIcons"
+
       - name: Show compiler errors
         if: failure()
         run: grep -nE "(error|fatal error):" build.log | head -100 || true
