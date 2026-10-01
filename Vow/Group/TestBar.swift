@@ -1,10 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// Fixed glass bar pinned to the bottom (via safeAreaInset in MainView).
-struct DemoBar: View {
-    @Environment(VowStore.self) private var store
+/// Fixed glass bar pinned to the bottom of a test group you own (via safeAreaInset in GroupView).
+struct TestBar: View {
+    let id: GroupID
+
+    @Environment(AppStore.self) private var store
     @State private var confirmReset: Bool = false
+    @State private var busy: Bool = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -16,13 +19,22 @@ struct DemoBar: View {
         .overlay(Capsule().strokeBorder(Theme.rim, lineWidth: 0.75))
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
-        .confirmationDialog("Reset Vow?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Reset everything", role: .destructive) {
-                store.reset()
+        .confirmationDialog("Reset this test group?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Reset group", role: .destructive) {
+                run { await store.resetTestGroup(id) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This clears your vow, streak, pot and ledger.")
+            Text("Starts over from day 1 for everyone. Check-ins, streaks and points so far are cleared.")
+        }
+    }
+
+    private func run(_ work: @escaping @MainActor () async -> Void) {
+        guard !busy else { return }
+        busy = true
+        Task { @MainActor in
+            await work()
+            busy = false
         }
     }
 
@@ -39,7 +51,7 @@ struct DemoBar: View {
     private var advanceButton: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            store.advanceDay()
+            run { await store.advanceTestDay(id) }
         } label: {
             Text("Advance to next day →")
                 .font(Theme.display(15, .bold))
@@ -50,8 +62,10 @@ struct DemoBar: View {
                 .padding(.vertical, 13)
                 .background(Capsule().fill(Theme.brand))
                 .contentShape(Capsule())
+                .opacity(busy ? 0.6 : 1.0)
         }
         .buttonStyle(.plain)
+        .disabled(busy)
     }
 
     private var resetButton: some View {
@@ -68,5 +82,6 @@ struct DemoBar: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .disabled(busy)
     }
 }

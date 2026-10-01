@@ -1,9 +1,10 @@
 import SwiftUI
 
 struct PotCard: View {
-    let stake: Stake
-    let cyclePot: Double
+    /// Unsplit carry after the last closed day.
     let pot: Double
+    let totalForfeited: Double
+    /// Viewer's net in this group.
     let net: Double
 
     private var netColor: Color {
@@ -12,18 +13,14 @@ struct PotCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Pot · this cycle")
+            Text("Pot · forfeited so far")
                 .eyebrow()
-            Text(stake.format(cyclePot))
+            Text(Points.format(totalForfeited))
                 .font(Theme.mono(36, .bold))
                 .foregroundStyle(Color.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-            if pot > 0 {
-                Text("Carrying " + stake.format(pot) + " · nobody kept")
-                    .font(Theme.mono(12, .medium))
-                    .foregroundStyle(Theme.amber)
-            }
+            carryLine
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 1)
@@ -33,12 +30,25 @@ struct PotCard: View {
         .glassCard()
     }
 
+    @ViewBuilder
+    private var carryLine: some View {
+        if pot > 0 {
+            Text("Carrying " + Points.format(pot) + " · nobody kept")
+                .font(Theme.mono(12, .medium))
+                .foregroundStyle(Theme.amber)
+        } else {
+            Text("Misses fill the pot; keepers split it.")
+                .font(Theme.mono(12, .medium))
+                .foregroundStyle(Color.white.opacity(0.45))
+        }
+    }
+
     private var netRow: some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Your net")
                 .eyebrow()
             Spacer(minLength: 8)
-            Text(stake.format(net, signed: true))
+            Text(Points.format(net, signed: true))
                 .font(Theme.mono(18, .semibold))
                 .foregroundStyle(netColor)
         }

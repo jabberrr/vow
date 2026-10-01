@@ -10,14 +10,14 @@ private enum StreakPipKind: Equatable {
 struct StreakCard: View {
     let streak: Int
     let best: Int
-    let history: [DayMark]
+    let history: [DayOutcome]
     let sealedToday: Bool
 
     private static let slots: Int = 14
 
     /// Oldest -> newest, left -> right. Last 13 marks + today's pip, padded with empties.
     private var pips: [StreakPipKind] {
-        let recent: [DayMark] = Array(history.suffix(StreakCard.slots - 1))
+        let recent: [DayOutcome] = Array(history.suffix(StreakCard.slots - 1))
         var result: [StreakPipKind] = []
         for mark in recent {
             result.append(mark == .kept ? StreakPipKind.kept : StreakPipKind.missed)

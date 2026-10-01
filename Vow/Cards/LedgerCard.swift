@@ -1,19 +1,26 @@
 import SwiftUI
 
 struct LedgerCard: View {
-    /// Newest first (as stored).
-    let entries: [LedgerEntry]
-    let stake: Stake
+    /// Newest first.
+    let lines: [LedgerLine]
+    var isTest: Bool = false
 
-    private var visible: [LedgerEntry] {
-        Array(entries.prefix(30))
+    private var visible: [LedgerLine] {
+        Array(lines.prefix(40))
+    }
+
+    private var emptyText: String {
+        if isTest {
+            return "Nothing yet. Advance the day to settle it: misses fill the pot, keepers split it."
+        }
+        return "Nothing yet. Each day settles at midnight: misses fill the pot, keepers split it."
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Ledger")
                 .eyebrow()
-            if entries.isEmpty {
+            if lines.isEmpty {
                 emptyState
             } else {
                 list
@@ -24,36 +31,28 @@ struct LedgerCard: View {
     }
 
     private var emptyState: some View {
-        Text("Nothing yet. Hold the orb to make your first mark.")
+        Text(emptyText)
             .font(Theme.mono(12, .medium))
             .foregroundStyle(Color.white.opacity(0.45))
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 6)
     }
 
     private var list: some View {
         VStack(spacing: 0) {
-            ForEach(visible) { entry in
-                LedgerRow(entry: entry, stake: stake)
+            ForEach(visible) { line in
+                LedgerRow(line: line)
             }
         }
     }
 }
 
 private struct LedgerRow: View {
-    let entry: LedgerEntry
-    let stake: Stake
-
-    private var dayTag: String {
-        "D " + String(format: "%02d", entry.day)
-    }
+    let line: LedgerLine
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(dayTag)
-                .font(Theme.mono(11, .semibold))
-                .foregroundStyle(Color.white.opacity(0.4))
-                .frame(width: 38, alignment: .leading)
-            Text(entry.text)
+            Text(line.text)
                 .font(Theme.mono(12, .medium))
                 .foregroundStyle(Color.white.opacity(0.82))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -70,8 +69,8 @@ private struct LedgerRow: View {
 
     @ViewBuilder
     private var amount: some View {
-        if let value = entry.amount {
-            Text(stake.format(value, signed: true))
+        if let value = line.amount {
+            Text(Points.format(value, signed: true))
                 .font(Theme.mono(12, .semibold))
                 .foregroundStyle(value >= 0 ? Theme.lime : Theme.pink)
                 .lineLimit(1)

@@ -1,16 +1,15 @@
 import SwiftUI
 
 struct VowCard: View {
-    let state: VowState
-
-    private static let swornFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f
-    }()
+    let vow: String
+    let groupName: String
+    /// Preformatted, e.g. "2 pts".
+    let stake: String
+    /// Preformatted join date ("Oct 1") or test day ("Day 3").
+    let since: String
 
     private var vowText: Text {
-        let parts = VowText.split(state.vow)
+        let parts = VowText.split(vow)
         let head: Text = Text(parts.prefix).foregroundStyle(Color.white)
         let verb: Text = Text(parts.verb).foregroundStyle(Theme.brand)
         let tail: Text = Text(parts.suffix).foregroundStyle(Color.white)
@@ -33,9 +32,9 @@ struct VowCard: View {
 
     private var cells: some View {
         HStack(alignment: .top, spacing: 12) {
-            VowStatCell(label: "Crew", value: state.crew.title)
-            VowStatCell(label: "Stake", value: state.stake.label)
-            VowStatCell(label: "Sworn", value: VowCard.swornFormatter.string(from: state.swornAt))
+            VowStatCell(label: "Group", value: groupName)
+            VowStatCell(label: "Stake", value: stake)
+            VowStatCell(label: "Since", value: since)
         }
     }
 }
