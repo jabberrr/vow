@@ -8,16 +8,25 @@ way to produce the project; if you change project.yml, change the settings
 below to match (and vice versa).
 
 What it does:
-  * walks <root>/Vow recursively and adds every *.swift file to the Vow target
-    (groups mirror folders), every *.xcassets catalog to its Resources phase,
-    and Info.plist as a plain reference (it is INFOPLIST_FILE, never copied);
-    hidden files and anything else are ignored,
+  * walks <root>/Vow recursively and adds every *.swift file to the Vow app
+    target (groups mirror folders), every *.xcassets catalog to its Resources
+    phase, and Info.plist / *.entitlements as plain references (they are
+    INFOPLIST_FILE / CODE_SIGN_ENTITLEMENTS, never copied); hidden files and
+    anything else are ignored,
+  * walks <root>/VowTests the same way for the VowTests unit-test bundle
+    (hosted by Vow.app, depends on the Vow target),
+  * references Config/Vow.xcconfig (in a "Config" group) as the base
+    configuration of the app's Debug and Release configs; it owns
+    PRODUCT_BUNDLE_IDENTIFIER and DEVELOPMENT_TEAM and includes the optional,
+    git-ignored Config/Local.xcconfig,
   * writes Vow.xcodeproj/project.pbxproj, the embedded workspace, the
-    IDEWorkspaceChecks.plist, and the shared `Vow` scheme,
+    IDEWorkspaceChecks.plist, and the shared `Vow` scheme (Test runs VowTests),
   * derives every object ID from an md5 of a stable role/path string, so
     reruns over the same tree produce byte-identical output,
   * re-parses the pbxproj it wrote (tiny old-style ASCII plist parser) and
-    checks that every referenced object ID is defined; exits non-zero if not.
+    checks that every referenced object ID is defined, every object is
+    reachable, each target's Sources phase holds exactly its Swift files, and
+    the app's configs use the xcconfig; exits non-zero if not.
 
 Usage:
   python3 scripts/gen_xcodeproj.py [ROOT]      # ROOT defaults to the repo root
@@ -36,32 +45,72 @@ import sys
 # ---------------------------------------------------------------------------
 
 PROJECT_NAME = "Vow"
-TARGET_NAME = "Vow"
-SOURCE_DIR = "Vow"
-PRODUCT_FILE = "Vow.app"
 DEPLOYMENT_TARGET = "17.0"
 XCODE_VERSION_CODE = "1600"  # xcodeVersion: 16.0
 OBJECT_VERSION = "56"
 COMPATIBILITY_VERSION = "Xcode 14.0"
 
-TARGET_SETTINGS = {
+# Base configuration for the app target (Debug and Release). It sets
+# PRODUCT_BUNDLE_IDENTIFIER and DEVELOPMENT_TEAM and includes the git-ignored
+# Config/Local.xcconfig, so those two settings must NOT appear in
+# APP_SETTINGS (target-level settings override the xcconfig).
+APP_XCCONFIG = "Config/Vow.xcconfig"
+
+APP_SETTINGS = {
     "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+    "CODE_SIGN_ENTITLEMENTS": "Vow/Vow.entitlements",
     "CODE_SIGN_STYLE": "Automatic",
     "CURRENT_PROJECT_VERSION": "1",
-    "DEVELOPMENT_TEAM": "",
     "ENABLE_PREVIEWS": "YES",
     "GENERATE_INFOPLIST_FILE": "NO",
     "INFOPLIST_FILE": "Vow/Info.plist",
     "IPHONEOS_DEPLOYMENT_TARGET": DEPLOYMENT_TARGET,
     "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/Frameworks"],
     "MARKETING_VERSION": "1.0",
-    "PRODUCT_BUNDLE_IDENTIFIER": "com.example.vow",
     "PRODUCT_NAME": "$(TARGET_NAME)",
     "SDKROOT": "iphoneos",
     "SWIFT_EMIT_LOC_STRINGS": "YES",
     "SWIFT_VERSION": "5.0",
     "TARGETED_DEVICE_FAMILY": "1",
 }
+
+TEST_SETTINGS = {
+    "BUNDLE_LOADER": "$(TEST_HOST)",
+    "CODE_SIGN_STYLE": "Automatic",
+    "GENERATE_INFOPLIST_FILE": "YES",
+    "IPHONEOS_DEPLOYMENT_TARGET": DEPLOYMENT_TARGET,
+    "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/Frameworks",
+                               "@loader_path/Frameworks"],
+    "PRODUCT_BUNDLE_IDENTIFIER": "com.example.vow.tests",
+    "PRODUCT_NAME": "$(TARGET_NAME)",
+    "SDKROOT": "iphoneos",
+    "SWIFT_VERSION": "5.0",
+    "TARGETED_DEVICE_FAMILY": "1",
+    "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/Vow.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vow",
+}
+
+
+class TargetSpec(object):
+    def __init__(self, name, source_dir, product, product_type, file_type,
+                 settings, xcconfig=None, host=None, required=True):
+        self.name = name
+        self.source_dir = source_dir      # folder walked for sources
+        self.product = product            # product file name
+        self.product_type = product_type
+        self.file_type = file_type        # explicitFileType of the product
+        self.settings = settings
+        self.xcconfig = xcconfig          # baseConfigurationReference (both configs)
+        self.host = host                  # name of the app target a test bundle runs in
+        self.required = required          # missing source_dir is an error
+
+
+APP = TargetSpec("Vow", "Vow", "Vow.app", "com.apple.product-type.application",
+                 "wrapper.application", APP_SETTINGS, xcconfig=APP_XCCONFIG)
+TESTS = TargetSpec("VowTests", "VowTests", "VowTests.xctest",
+                   "com.apple.product-type.bundle.unit-test", "wrapper.cfbundle",
+                   TEST_SETTINGS, host="Vow", required=False)
+TARGETS = [APP, TESTS]
+TARGET_NAME = APP.name  # the scheme is named after the app
 
 PROJECT_COMMON = {
     "ALWAYS_SEARCH_USER_PATHS": "NO",
@@ -187,10 +236,14 @@ class Node(object):
         self.extras = []     # [(rel path, lastKnownFileType, in Resources phase)]
 
 
-def scan(root):
-    src = os.path.join(root, SOURCE_DIR)
+def scan(root, spec):
+    src = os.path.join(root, spec.source_dir)
     if not os.path.isdir(src):
-        raise SystemExit("error: source directory not found: %s" % src)
+        if spec.required:
+            raise SystemExit("error: source directory not found: %s" % src)
+        sys.stderr.write("warning: %s not found; target %s has no sources\n"
+                         % (spec.source_dir, spec.name))
+        return Node(spec.source_dir, spec.source_dir)
     skipped = []
 
     def walk(abs_dir, rel):
@@ -209,12 +262,16 @@ def scan(root):
             elif os.path.isfile(p) and entry.endswith(".swift"):
                 node.files.append(r)
             elif os.path.isfile(p) and entry == "Info.plist":
+                # INFOPLIST_FILE: referenced, never copied.
                 node.extras.append((r, "text.plist.xml", False))
+            elif os.path.isfile(p) and entry.endswith(".entitlements"):
+                # CODE_SIGN_ENTITLEMENTS: referenced, never in a build phase.
+                node.extras.append((r, "text.plist.entitlements", False))
             else:
                 skipped.append(r)
         return node
 
-    tree = walk(src, SOURCE_DIR)
+    tree = walk(src, spec.source_dir)
     for s in skipped:
         sys.stderr.write("note: not added to project: %s\n" % s)
     return tree
@@ -253,30 +310,57 @@ def settings_block(settings, indent):
     return lines
 
 
-def build_pbxproj(tree):
-    files = all_files(tree)
-
+def build_pbxproj(trees):
+    """trees: {target name: Node}. Returns (pbxproj text, {target name: id})."""
     project_id = oid("project")
     main_group = oid("group", "<main>")
     products_group = oid("group", "<products>")
-    product_ref = oid("product", PRODUCT_FILE)
-    target_id = oid("target", TARGET_NAME)
-    sources_phase = oid("phase", "sources", TARGET_NAME)
-    frameworks_phase = oid("phase", "frameworks", TARGET_NAME)
-    resources_phase = oid("phase", "resources", TARGET_NAME)
     proj_cfg_list = oid("configlist", "project")
-    tgt_cfg_list = oid("configlist", "target", TARGET_NAME)
     proj_debug = oid("config", "project", "Debug")
     proj_release = oid("config", "project", "Release")
-    tgt_debug = oid("config", "target", TARGET_NAME, "Debug")
-    tgt_release = oid("config", "target", TARGET_NAME, "Release")
 
-    extras = all_extras(tree)
-    resources = [r for r, _, in_res in extras if in_res]
-    file_ref = {f: oid("fileref", f) for f in files}
-    file_ref.update({r: oid("fileref", r) for r, _, _ in extras})
-    build_file = {f: oid("buildfile", "sources", f) for f in files}
-    res_build_file = {r: oid("buildfile", "resources", r) for r in resources}
+    # Per-target IDs. The app's IDs keep the keys used before VowTests existed.
+    T = {}
+    for spec in TARGETS:
+        n = spec.name
+        tree = trees[n]
+        extras = all_extras(tree)
+        T[n] = {
+            "spec": spec,
+            "tree": tree,
+            "files": all_files(tree),
+            "extras": extras,
+            "resources": [r for r, _, in_res in extras if in_res],
+            "id": oid("target", n),
+            "product_ref": oid("product", spec.product),
+            "sources": oid("phase", "sources", n),
+            "frameworks": oid("phase", "frameworks", n),
+            "resources_phase": oid("phase", "resources", n),
+            "cfg_list": oid("configlist", "target", n),
+            "debug": oid("config", "target", n, "Debug"),
+            "release": oid("config", "target", n, "Release"),
+        }
+        if spec.host:
+            T[n]["proxy"] = oid("proxy", n, spec.host)
+            T[n]["dependency"] = oid("dependency", n, spec.host)
+
+    file_ref = {}
+    build_file = {}
+    res_build_file = {}
+    for t in T.values():
+        for f in t["files"]:
+            file_ref[f] = oid("fileref", f)
+            build_file[f] = oid("buildfile", "sources", f)
+        for r, _, _ in t["extras"]:
+            file_ref[r] = oid("fileref", r)
+        for r in t["resources"]:
+            res_build_file[r] = oid("buildfile", "resources", r)
+
+    # xcconfig files (referenced in a "Config" group, never in a build phase).
+    xcconfigs = sorted(set(s.xcconfig for s in TARGETS if s.xcconfig))
+    for x in xcconfigs:
+        file_ref[x] = oid("fileref", x)
+    config_dirs = sorted(set(x.rsplit("/", 1)[0] for x in xcconfigs if "/" in x))
 
     def base(f):
         return f.rsplit("/", 1)[-1]
@@ -294,28 +378,57 @@ def build_pbxproj(tree):
 
     # PBXBuildFile
     a("/* Begin PBXBuildFile section */")
-    for f in sorted(files, key=lambda f: build_file[f]):
-        a("\t\t%s /* %s in Sources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
-          % (build_file[f], cmt(base(f)), file_ref[f], cmt(base(f))))
-    for r in sorted(resources, key=lambda r: res_build_file[r]):
-        a("\t\t%s /* %s in Resources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
-          % (res_build_file[r], cmt(base(r)), file_ref[r], cmt(base(r))))
+    lines = []
+    for f in build_file:
+        lines.append((build_file[f],
+                      "\t\t%s /* %s in Sources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
+                      % (build_file[f], cmt(base(f)), file_ref[f], cmt(base(f)))))
+    for r in res_build_file:
+        lines.append((res_build_file[r],
+                      "\t\t%s /* %s in Resources */ = {isa = PBXBuildFile; fileRef = %s /* %s */; };"
+                      % (res_build_file[r], cmt(base(r)), file_ref[r], cmt(base(r)))))
+    for _, line in sorted(lines):
+        a(line)
     a("/* End PBXBuildFile section */")
+    a("")
+
+    # PBXContainerItemProxy
+    a("/* Begin PBXContainerItemProxy section */")
+    for n in sorted(T, key=lambda n: T[n].get("proxy", "")):
+        t = T[n]
+        if "proxy" not in t:
+            continue
+        host = T[t["spec"].host]
+        a("\t\t%s /* PBXContainerItemProxy */ = {" % t["proxy"])
+        a("\t\t\tisa = PBXContainerItemProxy;")
+        a("\t\t\tcontainerPortal = %s /* Project object */;" % project_id)
+        a("\t\t\tproxyType = 1;")
+        a("\t\t\tremoteGlobalIDString = %s;" % host["id"])
+        a("\t\t\tremoteInfo = %s;" % q(host["spec"].name))
+        a("\t\t};")
+    a("/* End PBXContainerItemProxy section */")
     a("")
 
     # PBXFileReference
     a("/* Begin PBXFileReference section */")
-    refs = [(file_ref[f],
-             "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = %s; sourceTree = %s; };"
-             % (file_ref[f], cmt(base(f)), q(base(f)), q("<group>")))
-            for f in files]
-    refs += [(file_ref[r],
-              "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = %s; path = %s; sourceTree = %s; };"
-              % (file_ref[r], cmt(base(r)), q(ftype), q(base(r)), q("<group>")))
-             for r, ftype, _ in extras]
-    refs.append((product_ref,
-                 "\t\t%s /* %s */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = %s; sourceTree = BUILT_PRODUCTS_DIR; };"
-                 % (product_ref, cmt(PRODUCT_FILE), q(PRODUCT_FILE))))
+    refs = []
+    for t in T.values():
+        refs += [(file_ref[f],
+                  "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = %s; sourceTree = %s; };"
+                  % (file_ref[f], cmt(base(f)), q(base(f)), q("<group>")))
+                 for f in t["files"]]
+        refs += [(file_ref[r],
+                  "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = %s; path = %s; sourceTree = %s; };"
+                  % (file_ref[r], cmt(base(r)), q(ftype), q(base(r)), q("<group>")))
+                 for r, ftype, _ in t["extras"]]
+        spec = t["spec"]
+        refs.append((t["product_ref"],
+                     "\t\t%s /* %s */ = {isa = PBXFileReference; explicitFileType = %s; includeInIndex = 0; path = %s; sourceTree = BUILT_PRODUCTS_DIR; };"
+                     % (t["product_ref"], cmt(spec.product), q(spec.file_type), q(spec.product))))
+    refs += [(file_ref[x],
+              "\t\t%s /* %s */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = %s; sourceTree = %s; };"
+              % (file_ref[x], cmt(base(x)), q(base(x)), q("<group>")))
+             for x in xcconfigs]
     for _, line in sorted(refs):
         a(line)
     a("/* End PBXFileReference section */")
@@ -323,13 +436,14 @@ def build_pbxproj(tree):
 
     # PBXFrameworksBuildPhase
     a("/* Begin PBXFrameworksBuildPhase section */")
-    a("\t\t%s /* Frameworks */ = {" % frameworks_phase)
-    a("\t\t\tisa = PBXFrameworksBuildPhase;")
-    a("\t\t\tbuildActionMask = 2147483647;")
-    a("\t\t\tfiles = (")
-    a("\t\t\t);")
-    a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
-    a("\t\t};")
+    for n in sorted(T, key=lambda n: T[n]["frameworks"]):
+        a("\t\t%s /* Frameworks */ = {" % T[n]["frameworks"])
+        a("\t\t\tisa = PBXFrameworksBuildPhase;")
+        a("\t\t\tbuildActionMask = 2147483647;")
+        a("\t\t\tfiles = (")
+        a("\t\t\t);")
+        a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
+        a("\t\t};")
     a("/* End PBXFrameworksBuildPhase section */")
     a("")
 
@@ -361,12 +475,21 @@ def build_pbxproj(tree):
         for g in node.groups:
             walk_groups(g)
 
-    emit_group(main_group, [(group_id(tree), tree.name), (products_group, "Products")],
+    main_children = [(group_id(T[s.name]["tree"]), T[s.name]["tree"].name) for s in TARGETS]
+    for d in config_dirs:
+        gid = oid("group", d)
+        main_children.append((gid, d))
+        emit_group(gid, [(file_ref[x], base(x)) for x in xcconfigs if x.rsplit("/", 1)[0] == d],
+                   {"comment": " /* %s */" % cmt(d),
+                    "props": [("path", q(d)), ("sourceTree", q("<group>"))]})
+    main_children.append((products_group, "Products"))
+    emit_group(main_group, main_children,
                {"comment": "", "props": [("sourceTree", q("<group>"))]})
-    emit_group(products_group, [(product_ref, PRODUCT_FILE)],
+    emit_group(products_group, [(T[s.name]["product_ref"], s.product) for s in TARGETS],
                {"comment": " /* Products */",
                 "props": [("name", "Products"), ("sourceTree", q("<group>"))]})
-    walk_groups(tree)
+    for s in TARGETS:
+        walk_groups(T[s.name]["tree"])
 
     a("/* Begin PBXGroup section */")
     for _, lines in sorted(groups):
@@ -376,24 +499,29 @@ def build_pbxproj(tree):
 
     # PBXNativeTarget
     a("/* Begin PBXNativeTarget section */")
-    a("\t\t%s /* %s */ = {" % (target_id, TARGET_NAME))
-    a("\t\t\tisa = PBXNativeTarget;")
-    a("\t\t\tbuildConfigurationList = %s /* Build configuration list for PBXNativeTarget \"%s\" */;"
-      % (tgt_cfg_list, TARGET_NAME))
-    a("\t\t\tbuildPhases = (")
-    a("\t\t\t\t%s /* Sources */," % sources_phase)
-    a("\t\t\t\t%s /* Frameworks */," % frameworks_phase)
-    a("\t\t\t\t%s /* Resources */," % resources_phase)
-    a("\t\t\t);")
-    a("\t\t\tbuildRules = (")
-    a("\t\t\t);")
-    a("\t\t\tdependencies = (")
-    a("\t\t\t);")
-    a("\t\t\tname = %s;" % q(TARGET_NAME))
-    a("\t\t\tproductName = %s;" % q(TARGET_NAME))
-    a("\t\t\tproductReference = %s /* %s */;" % (product_ref, PRODUCT_FILE))
-    a("\t\t\tproductType = %s;" % q("com.apple.product-type.application"))
-    a("\t\t};")
+    for n in sorted(T, key=lambda n: T[n]["id"]):
+        t = T[n]
+        spec = t["spec"]
+        a("\t\t%s /* %s */ = {" % (t["id"], cmt(n)))
+        a("\t\t\tisa = PBXNativeTarget;")
+        a("\t\t\tbuildConfigurationList = %s /* Build configuration list for PBXNativeTarget \"%s\" */;"
+          % (t["cfg_list"], cmt(n)))
+        a("\t\t\tbuildPhases = (")
+        a("\t\t\t\t%s /* Sources */," % t["sources"])
+        a("\t\t\t\t%s /* Frameworks */," % t["frameworks"])
+        a("\t\t\t\t%s /* Resources */," % t["resources_phase"])
+        a("\t\t\t);")
+        a("\t\t\tbuildRules = (")
+        a("\t\t\t);")
+        a("\t\t\tdependencies = (")
+        if "dependency" in t:
+            a("\t\t\t\t%s /* PBXTargetDependency */," % t["dependency"])
+        a("\t\t\t);")
+        a("\t\t\tname = %s;" % q(n))
+        a("\t\t\tproductName = %s;" % q(n))
+        a("\t\t\tproductReference = %s /* %s */;" % (t["product_ref"], cmt(spec.product)))
+        a("\t\t\tproductType = %s;" % q(spec.product_type))
+        a("\t\t};")
     a("/* End PBXNativeTarget section */")
     a("")
 
@@ -406,9 +534,13 @@ def build_pbxproj(tree):
     a("\t\t\t\tLastSwiftUpdateCheck = %s;" % XCODE_VERSION_CODE)
     a("\t\t\t\tLastUpgradeCheck = %s;" % XCODE_VERSION_CODE)
     a("\t\t\t\tTargetAttributes = {")
-    a("\t\t\t\t\t%s = {" % target_id)
-    a("\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;")
-    a("\t\t\t\t\t};")
+    for n in sorted(T, key=lambda n: T[n]["id"]):
+        t = T[n]
+        a("\t\t\t\t\t%s = {" % t["id"])
+        a("\t\t\t\t\t\tCreatedOnToolsVersion = 16.0;")
+        if t["spec"].host:
+            a("\t\t\t\t\t\tTestTargetID = %s;" % T[t["spec"].host]["id"])
+        a("\t\t\t\t\t};")
     a("\t\t\t\t};")
     a("\t\t\t};")
     a("\t\t\tbuildConfigurationList = %s /* Build configuration list for PBXProject \"%s\" */;"
@@ -425,7 +557,8 @@ def build_pbxproj(tree):
     a("\t\t\tprojectDirPath = \"\";")
     a("\t\t\tprojectRoot = \"\";")
     a("\t\t\ttargets = (")
-    a("\t\t\t\t%s /* %s */," % (target_id, TARGET_NAME))
+    for s in TARGETS:
+        a("\t\t\t\t%s /* %s */," % (T[s.name]["id"], cmt(s.name)))
     a("\t\t\t);")
     a("\t\t};")
     a("/* End PBXProject section */")
@@ -433,43 +566,66 @@ def build_pbxproj(tree):
 
     # PBXResourcesBuildPhase
     a("/* Begin PBXResourcesBuildPhase section */")
-    a("\t\t%s /* Resources */ = {" % resources_phase)
-    a("\t\t\tisa = PBXResourcesBuildPhase;")
-    a("\t\t\tbuildActionMask = 2147483647;")
-    a("\t\t\tfiles = (")
-    for r in resources:
-        a("\t\t\t\t%s /* %s in Resources */," % (res_build_file[r], cmt(base(r))))
-    a("\t\t\t);")
-    a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
-    a("\t\t};")
+    for n in sorted(T, key=lambda n: T[n]["resources_phase"]):
+        t = T[n]
+        a("\t\t%s /* Resources */ = {" % t["resources_phase"])
+        a("\t\t\tisa = PBXResourcesBuildPhase;")
+        a("\t\t\tbuildActionMask = 2147483647;")
+        a("\t\t\tfiles = (")
+        for r in t["resources"]:
+            a("\t\t\t\t%s /* %s in Resources */," % (res_build_file[r], cmt(base(r))))
+        a("\t\t\t);")
+        a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
+        a("\t\t};")
     a("/* End PBXResourcesBuildPhase section */")
     a("")
 
     # PBXSourcesBuildPhase
     a("/* Begin PBXSourcesBuildPhase section */")
-    a("\t\t%s /* Sources */ = {" % sources_phase)
-    a("\t\t\tisa = PBXSourcesBuildPhase;")
-    a("\t\t\tbuildActionMask = 2147483647;")
-    a("\t\t\tfiles = (")
-    for f in files:
-        a("\t\t\t\t%s /* %s in Sources */," % (build_file[f], cmt(base(f))))
-    a("\t\t\t);")
-    a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
-    a("\t\t};")
+    for n in sorted(T, key=lambda n: T[n]["sources"]):
+        t = T[n]
+        a("\t\t%s /* Sources */ = {" % t["sources"])
+        a("\t\t\tisa = PBXSourcesBuildPhase;")
+        a("\t\t\tbuildActionMask = 2147483647;")
+        a("\t\t\tfiles = (")
+        for f in t["files"]:
+            a("\t\t\t\t%s /* %s in Sources */," % (build_file[f], cmt(base(f))))
+        a("\t\t\t);")
+        a("\t\t\trunOnlyForDeploymentPostprocessing = 0;")
+        a("\t\t};")
     a("/* End PBXSourcesBuildPhase section */")
+    a("")
+
+    # PBXTargetDependency
+    a("/* Begin PBXTargetDependency section */")
+    for n in sorted(T, key=lambda n: T[n].get("dependency", "")):
+        t = T[n]
+        if "dependency" not in t:
+            continue
+        host = T[t["spec"].host]
+        a("\t\t%s /* PBXTargetDependency */ = {" % t["dependency"])
+        a("\t\t\tisa = PBXTargetDependency;")
+        a("\t\t\ttarget = %s /* %s */;" % (host["id"], cmt(host["spec"].name)))
+        a("\t\t\ttargetProxy = %s /* PBXContainerItemProxy */;" % t["proxy"])
+        a("\t\t};")
+    a("/* End PBXTargetDependency section */")
     a("")
 
     # XCBuildConfiguration
     configs = [
-        (proj_debug, "Debug", PROJECT_DEBUG),
-        (proj_release, "Release", PROJECT_RELEASE),
-        (tgt_debug, "Debug", TARGET_SETTINGS),
-        (tgt_release, "Release", TARGET_SETTINGS),
+        (proj_debug, "Debug", PROJECT_DEBUG, None),
+        (proj_release, "Release", PROJECT_RELEASE, None),
     ]
+    for t in T.values():
+        spec = t["spec"]
+        configs.append((t["debug"], "Debug", spec.settings, spec.xcconfig))
+        configs.append((t["release"], "Release", spec.settings, spec.xcconfig))
     a("/* Begin XCBuildConfiguration section */")
-    for cid, name, settings in sorted(configs):
+    for cid, name, settings, xcconfig in sorted(configs, key=lambda c: c[0]):
         a("\t\t%s /* %s */ = {" % (cid, name))
         a("\t\t\tisa = XCBuildConfiguration;")
+        if xcconfig:
+            a("\t\t\tbaseConfigurationReference = %s /* %s */;" % (file_ref[xcconfig], cmt(base(xcconfig))))
         a("\t\t\tbuildSettings = {")
         L.extend(settings_block(settings, 4))
         a("\t\t\t};")
@@ -479,13 +635,12 @@ def build_pbxproj(tree):
     a("")
 
     # XCConfigurationList
-    lists = [
-        (proj_cfg_list, "PBXProject", PROJECT_NAME, proj_debug, proj_release),
-        (tgt_cfg_list, "PBXNativeTarget", TARGET_NAME, tgt_debug, tgt_release),
-    ]
+    lists = [(proj_cfg_list, "PBXProject", PROJECT_NAME, proj_debug, proj_release)]
+    for n, t in T.items():
+        lists.append((t["cfg_list"], "PBXNativeTarget", n, t["debug"], t["release"]))
     a("/* Begin XCConfigurationList section */")
     for lid, kind, name, dbg, rel in sorted(lists):
-        a("\t\t%s /* Build configuration list for %s \"%s\" */ = {" % (lid, kind, name))
+        a("\t\t%s /* Build configuration list for %s \"%s\" */ = {" % (lid, kind, cmt(name)))
         a("\t\t\tisa = XCConfigurationList;")
         a("\t\t\tbuildConfigurations = (")
         a("\t\t\t\t%s /* Debug */," % dbg)
@@ -498,7 +653,7 @@ def build_pbxproj(tree):
     a("\t};")
     a("\trootObject = %s /* Project object */;" % project_id)
     a("}")
-    return "\n".join(L) + "\n", target_id
+    return "\n".join(L) + "\n", dict((n, t["id"]) for n, t in T.items())
 
 
 # ---------------------------------------------------------------------------
@@ -525,15 +680,15 @@ WORKSPACE_CHECKS = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def build_scheme(target_id):
-    def ref(indent):
+def build_scheme(target_ids):
+    def ref(spec, indent):
         pad = " " * indent
         return "\n".join([
             "<BuildableReference",
             pad + '   BuildableIdentifier = "primary"',
-            pad + '   BlueprintIdentifier = "%s"' % target_id,
-            pad + '   BuildableName = "%s"' % PRODUCT_FILE,
-            pad + '   BlueprintName = "%s"' % TARGET_NAME,
+            pad + '   BlueprintIdentifier = "%s"' % target_ids[spec.name],
+            pad + '   BuildableName = "%s"' % spec.product,
+            pad + '   BlueprintName = "%s"' % spec.name,
             pad + '   ReferencedContainer = "container:%s.xcodeproj">' % PROJECT_NAME,
             pad + "</BuildableReference>",
         ])
@@ -554,6 +709,14 @@ def build_scheme(target_id):
             buildForAnalyzing = "YES">
             {ref_build}
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            {ref_build_tests}
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -562,6 +725,12 @@ def build_scheme(target_id):
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            {ref_test}
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -598,8 +767,10 @@ def build_scheme(target_id):
    </ArchiveAction>
 </Scheme>
 """.format(ver=XCODE_VERSION_CODE,
-           ref_build=ref(12),
-           ref_run=ref(9))
+           ref_build=ref(APP, 12),
+           ref_build_tests=ref(TESTS, 12),
+           ref_test=ref(TESTS, 12),
+           ref_run=ref(APP, 9))
 
 
 # ---------------------------------------------------------------------------
@@ -775,18 +946,57 @@ def validate(pbx_text, expected_files=None):
     if orphans:
         problems.append("unreachable objects: %s" % ", ".join(orphans))
 
-    # Sources phase holds exactly the swift files.
+    # Each target's Sources phase holds exactly that target's swift files.
+    targets = dict((o.get("name"), o) for o in objects.values()
+                   if isinstance(o, dict) and o.get("isa") == "PBXNativeTarget")
     phases = [o for o in objects.values() if o.get("isa") == "PBXSourcesBuildPhase"]
-    if len(phases) != 1:
-        problems.append("expected 1 PBXSourcesBuildPhase, found %d" % len(phases))
-    elif expected_files is not None:
-        names = []
-        for bf in phases[0].get("files", []):
-            fr = objects.get(objects.get(bf, {}).get("fileRef"), {})
-            names.append(fr.get("path", "<missing %s>" % bf))
-        want = sorted(f.rsplit("/", 1)[-1] for f in expected_files)
-        if sorted(names) != want:
-            problems.append("sources phase mismatch: %s vs %s" % (sorted(names), want))
+    if len(phases) != len(targets):
+        problems.append("expected %d PBXSourcesBuildPhase (one per target), found %d"
+                        % (len(targets), len(phases)))
+    if expected_files is not None:
+        if sorted(targets) != sorted(expected_files):
+            problems.append("targets mismatch: %s vs %s" % (sorted(targets), sorted(expected_files)))
+        for name, want_files in sorted(expected_files.items()):
+            tgt = targets.get(name)
+            if tgt is None:
+                continue
+            src = [objects.get(p, {}) for p in tgt.get("buildPhases", [])]
+            src = [p for p in src if p.get("isa") == "PBXSourcesBuildPhase"]
+            if len(src) != 1:
+                problems.append("target %s: expected 1 Sources phase, found %d" % (name, len(src)))
+                continue
+            names = []
+            for bf in src[0].get("files", []):
+                fr = objects.get(objects.get(bf, {}).get("fileRef"), {})
+                names.append(fr.get("path", "<missing %s>" % bf))
+            want = sorted(f.rsplit("/", 1)[-1] for f in want_files)
+            if sorted(names) != want:
+                problems.append("target %s: sources phase mismatch: %s vs %s"
+                                % (name, sorted(names), want))
+
+    # Info.plist, entitlements and xcconfig files are referenced, never built.
+    never_built = ("text.plist.xml", "text.plist.entitlements", "text.xcconfig")
+    for o in objects.values():
+        if o.get("isa") == "PBXBuildFile":
+            fr = objects.get(o.get("fileRef"), {})
+            if fr.get("lastKnownFileType") in never_built:
+                problems.append("%s must not be in a build phase" % fr.get("path"))
+
+    # The app's configs are based on its xcconfig, and the xcconfig owns the
+    # bundle ID and team (target-level values would override it).
+    app = targets.get(APP.name)
+    if app is not None and APP.xcconfig:
+        cfgs = objects.get(app.get("buildConfigurationList"), {}).get("buildConfigurations", [])
+        for c in cfgs:
+            cfg = objects.get(c, {})
+            ref = objects.get(cfg.get("baseConfigurationReference"), {})
+            if ref.get("path") != APP.xcconfig.rsplit("/", 1)[-1]:
+                problems.append("%s config %s is not based on %s"
+                                % (APP.name, cfg.get("name"), APP.xcconfig))
+            for k in ("PRODUCT_BUNDLE_IDENTIFIER", "DEVELOPMENT_TEAM"):
+                if k in cfg.get("buildSettings", {}):
+                    problems.append("%s config %s sets %s (belongs in %s)"
+                                    % (APP.name, cfg.get("name"), k, APP.xcconfig))
     return problems
 
 
@@ -813,23 +1023,28 @@ def main(argv):
     proj = os.path.join(root, PROJECT_NAME + ".xcodeproj")
     pbx_path = os.path.join(proj, "project.pbxproj")
 
-    tree = scan(root)
-    files = all_files(tree)
-    seen_names = {}
-    for f in files:
-        b = f.rsplit("/", 1)[-1]
-        if b in seen_names:
-            sys.stderr.write("error: duplicate Swift file name %s (%s, %s); swiftc rejects this\n"
-                             % (b, seen_names[b], f))
+    for x in sorted(set(t.xcconfig for t in TARGETS if t.xcconfig)):
+        if not os.path.isfile(os.path.join(root, x)):
+            sys.stderr.write("error: missing %s\n" % x)
             return 1
-        seen_names[b] = f
+    trees = dict((t.name, scan(root, t)) for t in TARGETS)
+    expected = dict((n, all_files(tree)) for n, tree in trees.items())
+    for n in sorted(expected):
+        seen_names = {}
+        for f in expected[n]:
+            b = f.rsplit("/", 1)[-1]
+            if b in seen_names:
+                sys.stderr.write("error: duplicate Swift file name %s in %s (%s, %s); swiftc rejects this\n"
+                                 % (b, n, seen_names[b], f))
+                return 1
+            seen_names[b] = f
 
     if check_only:
         with open(pbx_path, encoding="utf-8") as fh:
-            problems = validate(fh.read(), files)
+            problems = validate(fh.read(), expected)
     else:
-        pbx, target_id = build_pbxproj(tree)
-        problems = validate(pbx, files)
+        pbx, target_ids = build_pbxproj(trees)
+        problems = validate(pbx, expected)
         if problems:
             for p in problems:
                 sys.stderr.write("error: %s\n" % p)
@@ -840,16 +1055,19 @@ def main(argv):
         write(os.path.join(proj, "project.xcworkspace", "xcshareddata", "IDEWorkspaceChecks.plist"),
               WORKSPACE_CHECKS)
         write(os.path.join(proj, "xcshareddata", "xcschemes", TARGET_NAME + ".xcscheme"),
-              build_scheme(target_id))
+              build_scheme(target_ids))
 
     if problems:
         for p in problems:
             sys.stderr.write("error: %s\n" % p)
         return 1
-    print("%s %s (%d Swift files)" % ("validated" if check_only else "wrote",
-                                      os.path.relpath(proj, os.getcwd()), len(files)))
-    for f in files:
-        print("  " + f)
+    print("%s %s (%s)" % ("validated" if check_only else "wrote",
+                          os.path.relpath(proj, os.getcwd()),
+                          ", ".join("%s: %d Swift files" % (t.name, len(expected[t.name]))
+                                    for t in TARGETS)))
+    for t in TARGETS:
+        for f in expected[t.name]:
+            print("  " + f)
     return 0
 
 

@@ -1,0 +1,10 @@
+// Base build settings for the Vow app target (Debug and Release).
+//
+// Don't put your own bundle ID or team here. Copy Local.xcconfig.example to
+// Local.xcconfig (git-ignored) and set them there; it is included last, so its
+// values win.
+
+PRODUCT_BUNDLE_IDENTIFIER = com.example.vow
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

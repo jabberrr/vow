@@ -1,0 +1,15 @@
+// Local signing overrides for Vow. This file is an example and is not used.
+//
+// 1. Copy it:   cp Config/Local.xcconfig.example Config/Local.xcconfig
+//    (Config/Local.xcconfig is git-ignored and is optional: Vow.xcconfig pulls
+//    it in with `#include?`, so builds work without it.)
+// 2. Uncomment the two lines below and set:
+//    - PRODUCT_BUNDLE_IDENTIFIER: a reverse-DNS ID you own, e.g. com.yourname.vow.
+//      The iCloud container is iCloud.<this ID>, created by Xcode on the first
+//      signed build.
+//    - DEVELOPMENT_TEAM: your 10-character Apple Developer Team ID (Xcode →
+//      Settings → Accounts, or developer.apple.com → Membership details).
+// 3. Close and reopen Vow.xcodeproj if it was open.
+
+// PRODUCT_BUNDLE_IDENTIFIER = com.yourname.vow
+// DEVELOPMENT_TEAM = ABCDE12345

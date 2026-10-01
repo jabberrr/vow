@@ -41,6 +41,40 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build | tee build.log
 
+      - name: Unit tests (VowTests on an iPhone simulator)
+        run: |
+          set -o pipefail
+          # Newest iOS runtime this Xcode's SDK can run, first iPhone on it.
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          xcrun simctl list devices available -j > "$RUNNER_TEMP/sims.json"
+          UDID="$(SDK="$SDK" SIMS="$RUNNER_TEMP/sims.json" python3 - <<'PY'
+          import json, os, re, sys
+          sdk = tuple(int(x) for x in os.environ["SDK"].split(".")[:2])
+          devices = json.load(open(os.environ["SIMS"]))["devices"]
+          best = None
+          for runtime, devs in devices.items():
+              m = re.search(r"SimRuntime\.iOS-(\d+)-(\d+)", runtime)
+              if not m:
+                  continue
+              ver = (int(m.group(1)), int(m.group(2)))
+              if ver > sdk:
+                  continue
+              phones = [d for d in devs if d.get("isAvailable", True) and d["name"].startswith("iPhone")]
+              if phones and (best is None or ver > best[0]):
+                  best = (ver, phones[0]["udid"], phones[0]["name"])
+          if best is None:
+              sys.exit("no available iPhone simulator for iOS SDK %s" % os.environ["SDK"])
+          sys.stderr.write("Using %s (iOS %d.%d) %s\n" % (best[2], best[0][0], best[0][1], best[1]))
+          print(best[1])
+          PY
+          )"
+          xcodebuild \
+            -project Vow.xcodeproj \
+            -scheme Vow \
+            -destination "id=$UDID" \
+            CODE_SIGNING_ALLOWED=NO \
+            test | tee -a build.log
+
       - name: Archive for device (unsigned) and check the app icon
         run: |
           set -o pipefail
@@ -60,7 +94,7 @@ jobs:
 
       - name: Show compiler errors
         if: failure()
-        run: grep -nE "(error|fatal error):" build.log | head -100 || true
+        run: grep -nE "(error|fatal error):|Test Case .* failed|\*\* TEST FAILED" build.log | head -100 || true
 
       - name: Upload build log
         if: always()

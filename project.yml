@@ -1,9 +1,14 @@
 # XcodeGen spec for Vow. On a Mac: `brew install xcodegen && xcodegen generate`.
 # Without XcodeGen: `python3 scripts/gen_xcodeproj.py` (mirrors this file; keep them in sync).
+#
+# The bundle ID and team are NOT set here: they come from Config/Vow.xcconfig,
+# which includes the git-ignored Config/Local.xcconfig (see Local.xcconfig.example).
+# Don't add PRODUCT_BUNDLE_IDENTIFIER / DEVELOPMENT_TEAM to the Vow target's
+# settings below: target-level settings override the xcconfig. (No
+# options.bundleIdPrefix either, for the same reason.)
 name: Vow
 
 options:
-  bundleIdPrefix: com.example
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
@@ -15,36 +20,63 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
+    configFiles:
+      Debug: Config/Vow.xcconfig
+      Release: Config/Vow.xcconfig
     sources:
       - path: Vow
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.vow
         PRODUCT_NAME: Vow
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        # Explicit Info.plist (display name, icon, launch screen, portrait, dark).
+        # Explicit Info.plist (display name, icon, launch screen, portrait, dark, CKSharingSupported).
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Vow/Info.plist
+        # iCloud (CloudKit) container iCloud.$(CFBundleIdentifier) + push (aps-environment).
+        CODE_SIGN_ENTITLEMENTS: Vow/Vow.entitlements
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
         ENABLE_PREVIEWS: YES
         SWIFT_EMIT_LOC_STRINGS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+
+  VowTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: VowTests
+    dependencies:
+      - target: Vow
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.vow.tests
+        PRODUCT_NAME: VowTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Vow.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vow"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"
 
 schemes:
   Vow:
     build:
       targets:
         Vow: all
+        VowTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - VowTests
     profile:
       config: Release
     analyze:
