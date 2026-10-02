@@ -17,18 +17,20 @@ struct HomeScreen: View {
                 await store.refreshAll()
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Text("Vow")
-                    .font(Theme.display(28, .heavy))
-                    .gradientText()
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                settingsLink
-            }
+        // The logo and gear live in the content: a large logo in the nav bar gets collapsed into an
+        // overflow "•••" button on iOS 26, so Home shows no navigation bar at all.
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center) {
+            Text("Vow")
+                .font(Theme.display(30, .heavy))
+                .gradientText()
+            Spacer(minLength: 12)
+            settingsLink
         }
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
+        .frame(height: 44)
     }
 
     private var settingsLink: some View {
@@ -36,14 +38,17 @@ struct HomeScreen: View {
             SettingsView()
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.8))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Settings")
     }
 
     private var column: some View {
         VStack(alignment: .leading, spacing: 16) {
+            header
             BalanceCard(balance: store.totalBalance, groupCount: store.groupIDs.count)
             failureBanner
             groupsHeader
