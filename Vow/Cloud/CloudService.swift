@@ -373,6 +373,31 @@ enum CloudErrors {
         return c == .networkUnavailable || c == .networkFailure
     }
 
+    /// Why groups can't be used with this iCloud account status (any status but .available).
+    static func accountMessage(_ status: CKAccountStatus) -> String {
+        switch status {
+        case .restricted:
+            return "iCloud is restricted on this device. Groups need iCloud."
+        case .couldNotDetermine:
+            return "Couldn't check your iCloud account. Make sure you're signed in, then try again."
+        case .temporarilyUnavailable:
+            return "iCloud is temporarily unavailable. Check Settings > iCloud, then try again."
+        default:
+            return "Sign in to iCloud in Settings to use groups."
+        }
+    }
+
+    /// The underlying CloudKit error (the first real one inside a partial failure).
+    private static func detail(_ error: Error) -> CKError? {
+        guard let ck = error as? CKError else { return nil }
+        if ck.code == .partialFailure, let parts = ck.partialErrorsByItemID {
+            for (_, part) in parts {
+                if let pc = part as? CKError, pc.code != .batchRequestFailed { return pc }
+            }
+        }
+        return ck
+    }
+
     static func message(_ error: Error) -> String {
         if let app = error as? CloudError {
             switch app {
@@ -401,8 +426,19 @@ enum CloudErrors {
             return "Open the invite link again to verify your account."
         case .serverRecordChanged:
             return "Someone else changed this. Pull to refresh."
+        case .badContainer, .missingEntitlement:
+            return "This build isn't set up for iCloud: turn on iCloud > CloudKit for the app and check its container (code \(c.rawValue))."
+        case .accountTemporarilyUnavailable:
+            return "iCloud is temporarily unavailable. Check Settings > iCloud, then try again."
         default:
-            return "Something went wrong (code \(c.rawValue))."
+            let text: String = detail(error)?.localizedDescription ?? ""
+            if text.localizedCaseInsensitiveContains("production schema") {
+                return "The iCloud schema hasn't been deployed to Production yet. Deploy it in the CloudKit Console, or use a build run from Xcode (code \(c.rawValue))."
+            }
+            if text.isEmpty {
+                return "Something went wrong (code \(c.rawValue))."
+            }
+            return "Something went wrong (code \(c.rawValue)): \(text)"
         }
     }
 }

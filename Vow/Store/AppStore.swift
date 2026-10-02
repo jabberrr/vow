@@ -22,6 +22,8 @@ final class AppStore {
     private(set) var isRefreshing: Bool = false
     var toast: String? = nil
     var pendingVowPrompt: GroupID? = nil
+    /// The most recent create/join failure, shown inside the sheet (a toast would sit behind it).
+    private(set) var lastError: String? = nil
 
     private var testingModeStorage: Bool = false
 
@@ -89,23 +91,8 @@ final class AppStore {
 
         do {
             let status: CKAccountStatus = try await cloud.accountStatus()
-            switch status {
-            case .available:
-                break
-            case .noAccount:
-                phase = .noAccount("Sign in to iCloud in Settings to use groups.")
-                return
-            case .restricted:
-                phase = .noAccount("iCloud is restricted on this device. Groups need iCloud.")
-                return
-            case .couldNotDetermine:
-                phase = .noAccount("Couldn't check your iCloud account. Make sure you're signed in, then try again.")
-                return
-            case .temporarilyUnavailable:
-                phase = .noAccount("iCloud is temporarily unavailable. Check Settings > iCloud, then try again.")
-                return
-            @unknown default:
-                phase = .noAccount("Sign in to iCloud in Settings to use groups.")
+            guard status == .available else {
+                phase = .noAccount(CloudErrors.accountMessage(status))
                 return
             }
 
@@ -322,10 +309,8 @@ final class AppStore {
     // MARK: - Groups
 
     func createGroup(name: String, vow: String, stake: Int, isTest: Bool) async -> GroupID? {
-        guard let uid = userID else {
-            toast = "Sign in to iCloud."
-            return nil
-        }
+        lastError = nil
+        guard let uid = await ensureUserID() else { return nil }
         let groupName: String = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let vowText: String = vow.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !groupName.isEmpty else { return nil }
@@ -346,17 +331,48 @@ final class AppStore {
             toast = "Group created. Invite your crew."
             return s.group.id
         } catch {
-            toast = CloudErrors.message(error)
+            fail(error)
             return nil
         }
     }
 
+    /// The signed-in iCloud user, fetched on demand if launch couldn't get it (e.g. iCloud was
+    /// still signing in). Sets `lastError` and returns nil when there isn't one.
+    private func ensureUserID() async -> String? {
+        if let uid = userID { return uid }
+        do {
+            let status: CKAccountStatus = try await cloud.accountStatus()
+            guard status == .available else {
+                fail(message: CloudErrors.accountMessage(status))
+                return nil
+            }
+            let uid: String = try await cloud.currentUserID()
+            userID = uid
+            prefs.saveUserID(uid)
+            if phase != .ready { phase = .ready }
+            return uid
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    private func fail(_ error: Error) {
+        fail(message: CloudErrors.message(error))
+    }
+
+    private func fail(message: String) {
+        lastError = message
+        toast = message
+    }
+
     func join(url: URL) async -> Bool {
+        lastError = nil
         do {
             let metadata: CKShare.Metadata = try await cloud.shareMetadata(for: url)
             return await acceptShare(metadata)
         } catch {
-            toast = CloudErrors.message(error)
+            fail(error)
             return false
         }
     }
@@ -364,10 +380,7 @@ final class AppStore {
     /// Accepts an invitation (from a pasted link or from the system via ShareInbox).
     @discardableResult
     func acceptShare(_ metadata: CKShare.Metadata) async -> Bool {
-        guard userID != nil else {
-            toast = "Sign in to iCloud."
-            return false
-        }
+        guard await ensureUserID() != nil else { return false }
         do {
             let id: GroupID = try await cloud.accept(metadata)
             let s: GroupSnapshot = try await cloud.fetchSnapshot(id)
@@ -379,7 +392,7 @@ final class AppStore {
             }
             return true
         } catch {
-            toast = CloudErrors.message(error)
+            fail(error)
             return false
         }
     }

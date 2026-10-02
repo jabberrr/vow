@@ -61,7 +61,7 @@ struct JoinSheet: View {
             if ok {
                 dismiss()
             } else {
-                errorText = "Couldn't join with that link. Check it and try again."
+                errorText = "Couldn't join with that link. " + (store.lastError ?? "Check it and try again.")
             }
         }
     }

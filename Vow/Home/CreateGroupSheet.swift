@@ -95,7 +95,7 @@ struct CreateGroupSheet: View {
                 onCreated(newID)
                 dismiss()
             } else {
-                errorText = "Couldn't create the group. Check your iCloud connection and try again."
+                errorText = "Couldn't create the group. " + (store.lastError ?? "Check your iCloud connection and try again.")
             }
         }
     }
