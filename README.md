@@ -22,8 +22,8 @@ Vow is an iOS 17 SwiftUI app about keeping one promise a day, together. You make
    cp Config/Local.xcconfig.example Config/Local.xcconfig
    ```
 
-   In `Config/Local.xcconfig`, set `PRODUCT_BUNDLE_IDENTIFIER` (an ID you own, e.g. `com.yourname.vow`) and `DEVELOPMENT_TEAM` (your Team ID). Git ignores this file. `Config/Vow.xcconfig` includes it and holds the placeholders `com.example.vow` and an empty team.
-2. Open `Vow.xcodeproj` and go to the **Vow** target → **Signing & Capabilities**. Check that your team is selected and that the iCloud section lists the container `iCloud.<your bundle ID>` with a check next to it. If it doesn't, press **+** to add the container or the refresh button to reload it. The entitlements (`Vow/Vow.entitlements`) ask for CloudKit on `iCloud.$(CFBundleIdentifier)` and for push.
+   The bundle ID defaults to `app.dabora.vow` (in `Config/Vow.xcconfig`). To override it or set `DEVELOPMENT_TEAM`, use `Config/Local.xcconfig`, which git ignores. Don't type a bundle ID into Xcode's Signing pane: that writes it into the project file and conflicts with pulls.
+2. Open `Vow.xcodeproj` and go to the **Vow** target → **Signing & Capabilities**. Check that your team is selected and that the iCloud section lists the container `iCloud.app.dabora.vow`, ticked and **not red**. Red means the container isn't registered on your team yet: press the refresh button, and if it stays red, press **+** and enter `iCloud.app.dabora.vow` to create it. The entitlements (`Vow/Vow.entitlements`) ask for CloudKit on that container and for push.
 3. Sign into iCloud on the device or Simulator, then **Run** (⌘R) the **Vow** scheme.
 
 ### First run creates the schema (Development)

@@ -1,10 +1,11 @@
 // Base build settings for the Vow app target (Debug and Release).
 //
-// Don't put your own bundle ID or team here. Copy Local.xcconfig.example to
-// Local.xcconfig (git-ignored) and set them there; it is included last, so its
-// values win.
+// To use a different bundle ID or team without editing this file, copy
+// Local.xcconfig.example to Local.xcconfig (git-ignored); it is included last,
+// so its values win. The iCloud container is fixed in Vow/Vow.entitlements
+// (iCloud.app.dabora.vow); change it there if you switch to another team.
 
-PRODUCT_BUNDLE_IDENTIFIER = com.example.vow
+PRODUCT_BUNDLE_IDENTIFIER = app.dabora.vow
 DEVELOPMENT_TEAM =
 
 #include? "Local.xcconfig"

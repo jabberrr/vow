@@ -81,7 +81,7 @@ TEST_SETTINGS = {
     "IPHONEOS_DEPLOYMENT_TARGET": DEPLOYMENT_TARGET,
     "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/Frameworks",
                                "@loader_path/Frameworks"],
-    "PRODUCT_BUNDLE_IDENTIFIER": "com.example.vow.tests",
+    "PRODUCT_BUNDLE_IDENTIFIER": "app.dabora.vow.tests",
     "PRODUCT_NAME": "$(TARGET_NAME)",
     "SDKROOT": "iphoneos",
     "SWIFT_VERSION": "5.0",
