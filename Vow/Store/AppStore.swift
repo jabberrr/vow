@@ -328,7 +328,7 @@ final class AppStore {
             groupIDs.removeAll(where: { $0 == s.group.id })
             groupIDs.insert(s.group.id, at: 0)
             persist()
-            toast = "Group created. Invite your crew."
+            toast = "Group created."
             return s.group.id
         } catch {
             fail(error)
@@ -464,7 +464,7 @@ final class AppStore {
                 cur.checkIns.removeAll(where: { $0 == pending })
                 snapshots[id] = cur
             }
-            toast = "Couldn't check in. Check your connection and try again."
+            toast = "Couldn't check in. Try again."
         }
     }
 

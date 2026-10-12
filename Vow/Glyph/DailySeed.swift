@@ -59,7 +59,6 @@ struct DailyTheme: Equatable {
     let c2: Color
     let glyph: GlyphModel
     let glyphNumber: Int
-    let creed: String
 
     static func make(cycle: Int, day: Int) -> DailyTheme {
         let seed: UInt32 = FNV1a.hash("vow|\(cycle)|\(day)")
@@ -76,8 +75,7 @@ struct DailyTheme: Equatable {
             c1: Color(hue: h1 / 360.0, saturation: 0.85, brightness: 1.0),
             c2: Color(hue: h2 / 360.0, saturation: 0.85, brightness: 1.0),
             glyph: GlyphModel.cached(seed: seed),
-            glyphNumber: number,
-            creed: Creeds.line(for: number)
+            glyphNumber: number
         )
     }
 }

@@ -10,7 +10,7 @@ struct VowApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .tint(Theme.cyan)
+                .tint(Palette.accent)
                 .preferredColorScheme(.dark)
                 .task {
                     if !isRunningTests {

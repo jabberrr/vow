@@ -27,6 +27,8 @@ struct HomeView: View {
                     GroupView(id: groupID)
                 }
         }
+        // White back chevrons and toolbar icons; the sheets below keep the root's accent tint.
+        .tint(Palette.text)
         .sheet(isPresented: $showCreate, onDismiss: createDismissed) {
             CreateGroupSheet(onCreated: { newID in createdID = newID })
                 .environment(store)

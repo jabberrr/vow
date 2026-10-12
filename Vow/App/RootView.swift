@@ -1,4 +1,5 @@
 import SwiftUI
+import Accessibility
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
@@ -32,11 +33,11 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            Theme.bg
+            Palette.bg
                 .ignoresSafeArea()
             content
         }
-        .animation(.easeInOut(duration: 0.45), value: screen)
+        .animation(Motion.screen, value: screen)
         .overlay(alignment: .top) {
             toastOverlay
         }
@@ -72,9 +73,9 @@ struct RootView: View {
         case .failed(let message):
             PhaseScreen(
                 systemImage: "exclamationmark.icloud",
-                title: "Couldn't reach iCloud",
+                title: "Can't reach iCloud",
                 message: message,
-                actionTitle: "Retry",
+                actionTitle: "Try again",
                 action: { Task { await store.bootstrap() } }
             )
             .transition(.opacity)
@@ -84,6 +85,7 @@ struct RootView: View {
         }
     }
 
+    /// Never takes touches, so a toast can't block Back, the gear or toolbar items.
     private var toastOverlay: some View {
         VStack(spacing: 0) {
             if let text = toastText {
@@ -93,7 +95,8 @@ struct RootView: View {
         }
         .padding(.top, 6)
         .padding(.horizontal, 16)
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: toastText)
+        .animation(Motion.toast, value: toastText)
+        .allowsHitTesting(false)
     }
 
     private func handleToast(_ value: String?) {
@@ -101,8 +104,9 @@ struct RootView: View {
         store.toast = nil
         toastTask?.cancel()
         toastText = text
+        AccessibilityNotification.Announcement(text).post()
         toastTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            try? await Task.sleep(nanoseconds: Motion.toastNanos)
             if Task.isCancelled { return }
             toastText = nil
         }

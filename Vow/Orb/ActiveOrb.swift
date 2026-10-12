@@ -6,26 +6,31 @@ struct ActiveOrb: View {
     let theme: DailyTheme
     let phase: OrbPhase
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
+
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: false)) { timeline in
-            ActiveOrbFrame(theme: theme, phase: phase, date: timeline.date)
+            ActiveOrbFrame(theme: theme, phase: phase, date: timeline.date, still: reduceMotion)
         }
         .frame(width: 220, height: 220)
     }
 }
 
 /// One rendered frame of the active orb (pure function of theme, phase, date).
+/// `still` (Reduce Motion) freezes the ambient motion: breathing, dashed orbit, orbit-dot rotation.
+/// The ring, comet head, charge squeeze and pop stay; they are the hold's feedback.
 struct ActiveOrbFrame: View {
     let theme: DailyTheme
     let phase: OrbPhase
     let date: Date
+    let still: Bool
 
     var body: some View {
         let p: Double = phase.progress(at: date)
-        let breath: Double = OrbMath.breath(date)
-        let groupScale: Double = OrbMath.groupScale(phase: phase, date: date)
-        let dashAngle: Double = OrbMath.loop(date, period: 40) * 360
-        let dotsAngle: Double = OrbMath.loop(date, period: 7) * 2 * Double.pi
+        let breath: Double = still ? 0 : OrbMath.breath(date)
+        let groupScale: Double = still ? stillScale(progress: p) : OrbMath.groupScale(phase: phase, date: date)
+        let dashAngle: Double = still ? 0 : OrbMath.loop(date, period: 40) * 360
+        let dotsAngle: Double = still ? 0 : OrbMath.loop(date, period: 7) * 2 * Double.pi
         ZStack {
             OrbAura(
                 c1: theme.c1,
@@ -42,6 +47,14 @@ struct ActiveOrbFrame: View {
             .scaleEffect(CGFloat(groupScale))
         }
         .frame(width: 220, height: 220)
+    }
+
+    /// `OrbMath.groupScale` without the breathing: charge squeeze, then the completion pop.
+    private func stillScale(progress p: Double) -> Double {
+        if let done = phase.completedAt {
+            return OrbMath.popScale(date.timeIntervalSince(done))
+        }
+        return OrbMath.chargeSqueeze(p)
     }
 }
 

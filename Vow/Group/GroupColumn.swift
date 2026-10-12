@@ -1,75 +1,115 @@
 import SwiftUI
 
-/// The single scrolling column for one group. Everything above the orb has constant height in both
-/// states (header fixed, vow card unchanged by check-in, creed line fixed), so the orb never moves.
+/// The group screen's single column: header, the stage (vow, orb, status, progress) or the join
+/// prompt, then Crew and Points. Nothing above the orb changes height on check-in, so the orb never
+/// moves. During a hold every block except the vow and the orb dims with the room: per-block opacity
+/// only, no overlay and no hit-testing change, so the dim can never intercept the orb's gesture.
 struct GroupColumn: View {
+    let id: GroupID
     let group: GroupInfo
     let summary: GroupSummary
     let theme: DailyTheme
     let viewerID: String
-    let since: String
+    let roomDimmed: Bool
+    let hintFlash: Bool
+    let settleToken: Int
+    let rewardToken: Int
+    let canAdvance: Bool
     let onSealed: () -> Void
-    let onSetVow: () -> Void
+    let onFocusChange: (Bool) -> Void
+    let onEarlyRelease: () -> Void
+    let onEditVow: () -> Void
+    let onInvite: () -> Void
+
+    private var isMember: Bool {
+        summary.viewer != nil
+    }
+
+    private var sealed: Bool {
+        summary.viewer?.checkedInToday ?? false
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            HeaderView(group: group, cycle: summary.cycle, day: summary.dayInCycle)
-            memberSection
-            CrewCard(rows: summary.standings, viewerID: viewerID, stake: group.stake)
-            PotCard(pot: summary.pot, totalForfeited: summary.totalForfeited, net: summary.viewer?.net ?? 0)
-            LedgerCard(lines: summary.ledger, isTest: group.isTest)
+        VStack(spacing: 0) {
+            header
+            stage
+            crew
+            points
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 28)
+        .padding(.top, 4)
+        .padding(.bottom, Space.huge)
     }
 
+    private var header: some View {
+        GroupHeader(group: group, sealed: sealed, isMember: isMember)
+            .padding(.horizontal, Space.gutter)
+            .focusDimmed(roomDimmed)
+    }
+
+    /// The member branch never flips on check-in, so every stage view stays mounted through the seal.
+    /// Its views are direct children of the column, so the orb's zIndex lifts the burst above them all.
     @ViewBuilder
-    private var memberSection: some View {
+    private var stage: some View {
         if let viewer = summary.viewer {
-            VowCard(vow: viewer.vow, groupName: group.name, stake: GroupFormat.stake(group.stake), since: since)
-            CreedLine(glyphNumber: summary.glyphNumber, creed: theme.creed, sealed: viewer.checkedInToday)
-            orb(sealed: viewer.checkedInToday)
-            StreakCard(
-                streak: viewer.streak,
-                best: max(viewer.bestStreak, viewer.streak),
-                history: viewer.history,
-                sealedToday: viewer.checkedInToday
-            )
+            vowLine(viewer)
+            orb
+            status(viewer)
+            progress(viewer)
         } else {
-            JoinVowCard(groupName: group.name, stake: group.stake, action: onSetVow)
+            JoinPrompt(theme: theme, stake: group.stake, action: onEditVow)
+                .padding(.horizontal, Space.gutter)
+                .padding(.top, Space.xxl)
         }
     }
 
-    private func orb(sealed: Bool) -> some View {
-        OrbView(theme: theme, sealed: sealed, onSealed: onSealed)
+    /// Never dimmed: the vow stays lit with the orb.
+    private func vowLine(_ viewer: MemberStanding) -> some View {
+        VowLine(vow: viewer.vow, onEdit: onEditVow)
+            .padding(.horizontal, Space.gutter)
+            .padding(.top, Space.xxl - VowLine.tapPadding)
+    }
+
+    /// Never dimmed. `.id` remounts the orb on a new day or a reset.
+    private var orb: some View {
+        OrbView(theme: theme,
+                sealed: sealed,
+                onSealed: onSealed,
+                onFocusChange: onFocusChange,
+                onEarlyRelease: onEarlyRelease)
             .frame(width: 220, height: 220)
             .id("\(group.epoch)-\(summary.currentDay)")
             .frame(maxWidth: .infinity)
+            .padding(.top, Space.m - VowLine.tapPadding)
             .zIndex(1)
     }
-}
 
-/// Shown instead of the orb section while you're not a member of the group yet.
-struct JoinVowCard: View {
-    let groupName: String
-    let stake: Int
-    let action: () -> Void
+    private func status(_ viewer: MemberStanding) -> some View {
+        CheckInStatus(sealed: viewer.checkedInToday, highlighted: hintFlash, settleToken: settleToken)
+            .padding(.horizontal, Space.gutter)
+            .padding(.top, Space.xs)
+            .focusDimmed(roomDimmed)
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Not in yet")
-                .eyebrow()
-            Text("Set your vow to join")
-                .font(Theme.display(22, .semibold))
-                .gradientText()
-            Text("Everyone in \(groupName) keeps their own daily vow and stakes \(GroupFormat.stake(stake)) a day on it.")
-                .font(Theme.display(15, .regular))
-                .foregroundStyle(Color.white.opacity(0.65))
-                .fixedSize(horizontal: false, vertical: true)
-            PrimaryButton(title: "Set my vow", action: action)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+    /// Capped here (not inside) so ProgressSection's @ScaledMetric numeral sees the cap too.
+    private func progress(_ viewer: MemberStanding) -> some View {
+        ProgressSection(viewer: viewer, summary: summary, rewardToken: rewardToken)
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            .padding(.horizontal, Space.gutter)
+            .padding(.top, Space.section)
+            .focusDimmed(roomDimmed)
+    }
+
+    private var crew: some View {
+        CrewSection(rows: summary.standings, viewerID: viewerID, onInvite: onInvite)
+            .padding(.horizontal, Space.gutter)
+            .padding(.top, Space.section)
+            .focusDimmed(roomDimmed)
+    }
+
+    private var points: some View {
+        PointsSection(id: id, group: group, summary: summary, isMember: isMember, canAdvance: canAdvance)
+            .padding(.horizontal, Space.gutter)
+            .padding(.top, Space.section)
+            .focusDimmed(roomDimmed)
     }
 }

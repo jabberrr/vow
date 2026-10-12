@@ -46,7 +46,7 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 **Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created. A cycle is 30 days, and the cycle is only used for display.
 
-**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with the share button. When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **Join with link** on the home screen.
+**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with the **Invite** button. When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **Join with link** on the home screen.
 
 **Points.** At the end of each day:
 
@@ -57,7 +57,7 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 No device stores the results. Every device calculates them the same way from the shared check-in records (`Domain/Settlement.swift`), so everyone sees the same numbers. A check-in's time comes from the iCloud server (the record's creation date), not the phone's clock. A check-in that reaches the server up to 10 minutes after midnight still counts for the day before.
 
-**Testing mode.** Go to **Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Advance to next day →** in the test bar. **Reset group** asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
+**Testing mode.** Go to **Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** in the test bar. **Reset** asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
 
 ## Archive / TestFlight
 
@@ -76,14 +76,14 @@ Vow/
   Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting
   Cloud/       CloudService (CloudKit zones, shares, records), record mapping, ShareInbox
   Store/       AppStore (@Observable app state), snapshot cache, preferences
-  Home/        Balance, group list, create group, join with link
-  Group/       Group screen (orb, members, pot, ledger, share link), test bar
-  Settings/    Display name, testing mode, reset local data
+  Home/        Balance, groups (with mini orbs), create group, join with link
+  Group/       Group screen (vow, orb, streak and cycle beads, crew, points, activity), invite, vow prompt, test bar
+  Settings/    Your name, testing mode, reset local data, version
   Onboarding/  Pick a display name
-  Cards/       Shared cards and the toast
-  Theme/       Palette, fonts, glass card modifier, ambient background
-  Glyph/       Daily seed, constellation glyph and renderer, creed lines
-  Orb/         OrbView: press-and-hold check-in, ring, burst, haptic
+  Components/  Shared buttons, fields, status, sheet chrome, toast
+  Theme/       Palette, type, spacing, motion tokens and surfaces
+  Glyph/       Daily seed, constellation glyph and renderer
+  Orb/         OrbView: press-and-hold check-in, ring, burst, haptic; static (dormant and mini) orbs
   Sound/       SoundEngine: build-up tone and pop
   Info.plist, Vow.entitlements, Assets.xcassets
 VowTests/      XCTest unit tests (Domain: day math, settlement, formatting), hosted in Vow.app

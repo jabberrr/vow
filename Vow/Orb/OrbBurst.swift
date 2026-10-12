@@ -15,7 +15,7 @@ enum BurstParticles {
 
     static func make(theme: DailyTheme) -> [BurstParticle] {
         var rng = Mulberry32(seed: theme.seed ^ 0x5EEDB0B5)
-        let palette: [Color] = [theme.c1, theme.c2, Theme.cyan, Theme.pink, Theme.lime, Theme.amber]
+        let palette: [Color] = [theme.c1, theme.c2] + Palette.burstExtras
         var out: [BurstParticle] = []
         out.reserveCapacity(count)
         for i in 0..<count {

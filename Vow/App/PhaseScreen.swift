@@ -1,22 +1,21 @@
 import SwiftUI
 
-/// Quiet first-launch loading state: logo + spinner.
+/// First-launch loading state: wordmark + spinner.
 struct LoadingScreen: View {
     var body: some View {
-        ZStack {
-            AmbientBackground()
-            VStack(spacing: 18) {
-                Text("Vow")
-                    .font(Theme.display(44, .heavy))
-                    .gradientText()
-                ProgressView()
-                    .tint(Color.white.opacity(0.7))
-            }
+        VStack(spacing: 16) {
+            Text("Vow")
+                .font(Typeface.wordmarkLarge)
+                .foregroundStyle(Palette.text)
+            ProgressView()
+                .tint(Palette.text3)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .screenBackground()
     }
 }
 
-/// Full-screen card for account / connection problems, with a retry action.
+/// Full-screen account / connection problem with one way out. Scrolls only if the text outgrows the screen.
 struct PhaseScreen: View {
     let systemImage: String
     let title: String
@@ -25,29 +24,48 @@ struct PhaseScreen: View {
     let action: () -> Void
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
-            card
-                .padding(.horizontal, 20)
+        GeometryReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                column
+                    .frame(minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
         }
+        .screenBackground()
     }
 
-    private var card: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: systemImage)
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(Theme.cyan)
-            Text(title)
-                .font(Theme.display(26, .heavy))
-                .gradientText()
-            Text(message)
-                .font(Theme.display(15, .regular))
-                .foregroundStyle(Color.white.opacity(0.7))
-                .fixedSize(horizontal: false, vertical: true)
-            PrimaryButton(title: actionTitle, action: action)
-                .padding(.top, 4)
+    private var column: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: Space.huge)
+            problem
+            Spacer(minLength: Space.huge)
+            PrimaryButton(actionTitle, action: action)
+                .padding(.bottom, Space.l)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(padding: 22, radius: 26)
+        .padding(.horizontal, Space.gutter)
+    }
+
+    private var problem: some View {
+        VStack(spacing: 0) {
+            Image(systemName: systemImage)
+                .font(.system(size: 44, weight: .regular))
+                .foregroundStyle(Palette.text2)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(Typeface.title2)
+                .foregroundStyle(Palette.text)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 20)
+                .accessibilityAddTraits(.isHeader)
+            Text(message)
+                .font(Typeface.body)
+                .foregroundStyle(Palette.text2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+                .padding(.horizontal, 12)
+        }
+        .frame(maxWidth: .infinity)
     }
 }

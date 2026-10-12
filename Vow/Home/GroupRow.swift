@@ -1,107 +1,172 @@
 import SwiftUI
 
-/// One group in the Home list (used as a NavigationLink label).
+/// One group in the Home list (a NavigationLink label inside the Groups card).
 struct GroupRow: View {
     let id: GroupID
     @Environment(AppStore.self) private var store
 
     var body: some View {
+        content
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+            .contentShape(Rectangle())
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let snapshot = store.snapshots[id] {
-            GroupRowContent(group: snapshot.group, summary: store.summary(for: id))
+            GroupRowContent(group: snapshot.group, summary: store.summary(for: id), theme: store.theme(for: id))
         } else {
             loading
         }
     }
 
     private var loading: some View {
-        HStack(spacing: 12) {
-            Text("Loading group…")
-                .font(Theme.display(17, .semibold))
-                .foregroundStyle(Color.white.opacity(0.5))
-            Spacer(minLength: 8)
+        HStack(spacing: 14) {
             ProgressView()
-                .tint(Color.white.opacity(0.6))
+                .controlSize(.small)
+                .tint(Palette.text3)
+                .frame(width: 36, height: 36)
+            Text("Loading…")
+                .font(Typeface.headline)
+                .foregroundStyle(Palette.text3)
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading…")
     }
 }
 
+/// Mini orb, name (+ Test chip), today's status and streak, your net, chevron.
 private struct GroupRowContent: View {
     let group: GroupInfo
     let summary: GroupSummary?
+    let theme: DailyTheme
 
     private var viewer: MemberStanding? {
         summary?.viewer
     }
 
-    private var memberCount: Int {
-        summary?.standings.count ?? 0
+    private var status: TodayStatus {
+        guard let viewer = viewer else { return .notJoined }
+        return TodayStatus(viewer.status(isViewer: true))
     }
 
-    private var net: Double {
-        viewer?.net ?? 0
+    private var orbState: MiniOrbState {
+        switch status {
+        case .checkedIn:
+            return .sealed
+        case .notJoined:
+            return .notJoined
+        case .yourTurn, .notYet, .missedYesterday:
+            return .open
+        }
+    }
+
+    private var streak: Int {
+        viewer?.streak ?? 0
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            titleRow
-            infoRow
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
-            netRow
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
-        .contentShape(Rectangle())
-    }
-
-    private var titleRow: some View {
-        HStack(spacing: 8) {
-            Text(group.name)
-                .font(Theme.display(19, .semibold))
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
-            if group.isTest {
-                Badge(text: "Test", color: Theme.amber)
+        HStack(spacing: 14) {
+            MiniOrb(theme: theme, state: orbState)
+            VStack(alignment: .leading, spacing: 2) {
+                titleLine
+                subline
+                    .font(Typeface.subheadline)
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
+            if let viewer = viewer {
+                netText(viewer.net)
+            }
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.4))
+                .foregroundStyle(Palette.text3)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenLabel)
     }
 
-    private var infoRow: some View {
+    private var titleLine: some View {
         HStack(spacing: 8) {
-            Text(GroupFormat.members(memberCount) + " · " + GroupFormat.stake(group.stake) + "/day")
-                .font(Theme.mono(12, .medium))
-                .foregroundStyle(Color.white.opacity(0.55))
+            Text(group.name)
+                .font(Typeface.headline)
+                .foregroundStyle(Palette.text)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Spacer(minLength: 8)
-            statusBadge
+                .layoutPriority(1)
+            if group.isTest {
+                Chip("Test")
+            }
         }
     }
 
     @ViewBuilder
-    private var statusBadge: some View {
-        if let viewer = viewer {
-            StatusBadge(status: viewer.status(isViewer: true))
-        } else {
-            Badge(text: "Set your vow", color: Theme.cyan)
+    private var subline: some View {
+        switch status {
+        case .notJoined:
+            Text(TodayStatus.notJoined.title)
+                .foregroundStyle(Palette.text2)
+        case .checkedIn:
+            Text("\(streak)-day streak")
+                .foregroundStyle(Palette.text2)
+        case .yourTurn, .notYet, .missedYesterday:
+            yourTurnLine
         }
     }
 
-    private var netRow: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Your net")
-                .eyebrow()
-            Spacer(minLength: 8)
-            Text(Points.format(net, signed: true))
-                .font(Theme.mono(15, .semibold))
-                .foregroundStyle(net >= 0 ? Theme.lime : Theme.pink)
+    /// "Your turn · 12-day streak", falling back to "Your turn" when the row is too narrow.
+    @ViewBuilder
+    private var yourTurnLine: some View {
+        if streak > 0 {
+            ViewThatFits(in: .horizontal) {
+                yourTurnWithStreak
+                    .lineLimit(1)
+                yourTurn
+                    .lineLimit(1)
+            }
+        } else {
+            yourTurn
         }
+    }
+
+    private var yourTurn: Text {
+        Text(TodayStatus.yourTurn.title).foregroundStyle(Palette.text)
+    }
+
+    private var yourTurnWithStreak: Text {
+        let tail: Text = Text(" · \(streak)-day streak").foregroundStyle(Palette.text2)
+        return yourTurn + tail
+    }
+
+    /// Your own net, coloured; never truncated (the name gives way instead).
+    private func netText(_ net: Double) -> some View {
+        let parts: (number: String, unit: String) = PointsText.parts(net, signed: true)
+        let label: String = parts.unit.isEmpty ? parts.number : parts.number + " " + parts.unit
+        return Text(label)
+            .font(Typeface.subheadlineSemibold)
+            .monospacedDigit()
+            .foregroundStyle(Palette.points(net))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// "Morning run, test group, Your turn, 12-day streak, plus 4.5 points".
+    private var spokenLabel: String {
+        var parts: [String] = [group.name]
+        if group.isTest {
+            parts.append("test group")
+        }
+        parts.append(status.title)
+        if let viewer = viewer {
+            if viewer.streak > 0 {
+                parts.append("\(viewer.streak)-day streak")
+            }
+            parts.append(PointsText.spoken(viewer.net, signed: true))
+        }
+        return parts.joined(separator: ", ")
     }
 }

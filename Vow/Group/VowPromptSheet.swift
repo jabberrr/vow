@@ -9,6 +9,9 @@ struct VowPromptSheet: View {
     @State private var vow: String = ""
     @State private var busy: Bool = false
     @State private var didPrefill: Bool = false
+    /// Wording locked when saving starts: the store adds the member optimistically, which would
+    /// otherwise flip "Join" to "Edit vow" while the save is in flight.
+    @State private var savingAsMember: Bool? = nil
 
     private var group: GroupInfo? {
         store.snapshots[id]?.group
@@ -23,35 +26,48 @@ struct VowPromptSheet: View {
         return member.leftDay == nil
     }
 
-    private var explanation: String {
-        let stake: String = GroupFormat.stake(group?.stake ?? 0)
-        return "Hold the orb each day you keep it. Miss a day and your " + stake + " stake goes to the ones who kept theirs."
+    /// Edit wording for active members, join wording otherwise.
+    private var editing: Bool {
+        savingAsMember ?? isMember
+    }
+
+    private var title: String {
+        if editing { return "Edit vow" }
+        if let name = group?.name { return "Join \(name)" }
+        return "Join group"
+    }
+
+    /// The stake rule for newcomers; none when editing.
+    private var subtitle: String? {
+        guard !editing, let stake = group?.stake else { return nil }
+        if stake == 1 {
+            return "Miss a day and your 1 pt goes to the ones who kept theirs."
+        }
+        return "Miss a day and your \(GroupFormat.stake(stake)) go to the ones who kept theirs."
     }
 
     var body: some View {
-        SheetChrome(title: "Your vow for " + (group?.name ?? "this group")) {
-            Text(explanation)
-                .font(Theme.display(15, .regular))
-                .foregroundStyle(Color.white.opacity(0.65))
-                .fixedSize(horizontal: false, vertical: true)
-            FieldSection("Your daily vow") {
-                GlassField(placeholder: "I will train for 30 minutes", text: $vow)
+        SheetChrome(title: title, subtitle: subtitle) {
+            FormField("Your vow") {
+                VowField("Your vow", text: $vow, placeholder: "I will run 5k before work", autoFocus: true)
                     .onSubmit(swear)
             }
-            PrimaryButton(title: isMember ? "Save vow" : "Swear it", busy: busy, enabled: !trimmedVow.isEmpty, action: swear)
+            PrimaryButton(editing ? "Save" : "Join", busy: busy, enabled: !trimmedVow.isEmpty, action: swear)
         }
         .presentationDetents([.medium, .large])
-        .onAppear {
-            if !didPrefill {
-                didPrefill = true
-                vow = store.myMember(id)?.vow ?? ""
-            }
-        }
+        .onAppear(perform: prefill)
+    }
+
+    private func prefill() {
+        guard !didPrefill else { return }
+        didPrefill = true
+        vow = store.myMember(id)?.vow ?? ""
     }
 
     private func swear() {
         let text: String = trimmedVow
         guard !text.isEmpty, !busy else { return }
+        savingAsMember = isMember
         busy = true
         Task { @MainActor in
             await store.setVow(text, in: id)

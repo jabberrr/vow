@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// Sealed state: slowly rotating glyph, pulsing aura, rainbow orbit ring, three satellites.
-/// Same 220pt slot and same centre as the active orb.
+/// Same 220pt slot and same centre as the active orb. Reduce Motion holds it on one frame.
 struct SealedOrb: View {
     let theme: DailyTheme
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: reduceMotion)) { timeline in
             SealedOrbFrame(theme: theme, date: timeline.date)
         }
         .frame(width: 220, height: 220)

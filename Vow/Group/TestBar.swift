@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Fixed glass bar pinned to the bottom of a test group you own (via safeAreaInset in GroupView).
+/// Floating capsule pinned to the bottom of a test group you own (via safeAreaInset in GroupView).
+/// GroupView dims it with the room during a hold.
 struct TestBar: View {
     let id: GroupID
 
@@ -10,13 +11,12 @@ struct TestBar: View {
     @State private var busy: Bool = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             advanceButton
             resetButton
         }
         .padding(6)
         .background(barBackground)
-        .overlay(Capsule().strokeBorder(Theme.rim, lineWidth: 0.75))
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .confirmationDialog("Reset this test group?", isPresented: $confirmReset, titleVisibility: .visible) {
@@ -25,7 +25,7 @@ struct TestBar: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Starts over from day 1 for everyone. Check-ins, streaks and points so far are cleared.")
+            Text("Everyone starts over from day 1. Check-ins, streaks and points are cleared.")
         }
     }
 
@@ -38,13 +38,16 @@ struct TestBar: View {
         }
     }
 
+    /// Material capsule with an overlay tint, a hairline and the floating shadow.
     private var barBackground: some View {
         ZStack {
             Capsule()
                 .fill(.ultraThinMaterial)
-                .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(0.45), radius: 20, x: 0, y: 10)
             Capsule()
-                .fill(Color.white.opacity(0.05))
+                .fill(Palette.overlay.opacity(0.55))
+            Capsule()
+                .strokeBorder(Palette.hairline, lineWidth: 1)
         }
     }
 
@@ -53,18 +56,9 @@ struct TestBar: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             run { await store.advanceTestDay(id) }
         } label: {
-            Text("Advance to next day →")
-                .font(Theme.display(15, .bold))
-                .foregroundStyle(Color.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(Capsule().fill(Theme.brand))
-                .contentShape(Capsule())
-                .opacity(busy ? 0.6 : 1.0)
+            PrimaryLabel(title: "Next day", systemImage: "forward.fill", busy: busy)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .disabled(busy)
     }
 
@@ -72,16 +66,10 @@ struct TestBar: View {
         Button {
             confirmReset = true
         } label: {
-            Text("Reset")
-                .font(Theme.display(15, .semibold))
-                .foregroundStyle(Color.white.opacity(0.85))
-                .padding(.horizontal, 18)
-                .padding(.vertical, 13)
-                .background(Capsule().fill(Color.white.opacity(0.08)))
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.75))
-                .contentShape(Capsule())
+            SecondaryLabel(title: "Reset")
+                .frame(width: 96)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .disabled(busy)
     }
 }

@@ -4,6 +4,9 @@ struct OnboardingView: View {
     @Environment(AppStore.self) private var store
     @State private var name: String = ""
 
+    /// Blue to pink, close to the app icon.
+    static let heroTheme: DailyTheme = DailyTheme.make(cycle: 1, day: 22)
+
     private var trimmedName: String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -13,57 +16,56 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
+        GeometryReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                content
+                column
+                    .frame(minHeight: proxy.size.height)
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .screenBackground()
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 28) {
+    private var column: some View {
+        VStack(spacing: 0) {
             hero
-            FieldSection("Your name") {
-                GlassField(placeholder: "What should your crew call you?", text: $name, capitalization: .words)
-                    .onSubmit(submit)
-            }
-            PrimaryButton(title: "Continue", enabled: canContinue, action: submit)
-            footnote
+            Spacer(minLength: Space.section)
+            nameField
+            PrimaryButton("Continue", enabled: canContinue, action: submit)
+                .padding(.top, 20)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 56)
-        .padding(.bottom, 40)
+        .padding(.horizontal, Space.gutter)
+        .padding(.bottom, Space.l)
     }
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Vow")
-                .eyebrow()
-            Text("Make a vow.\nKeep the streak alive.")
-                .font(Theme.display(34, .heavy))
-                .gradientText()
+        VStack(spacing: 0) {
+            SealedOrb(theme: OnboardingView.heroTheme)
+                .frame(width: 220, height: 220)
+                .accessibilityHidden(true)
+            Text("Keep one promise a day.")
+                .font(Typeface.title)
+                .foregroundStyle(Palette.text)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 6) {
-                heroLine("Make a daily vow with friends and stake points on it.")
-                heroLine("Miss a day and your stake goes to the ones who kept theirs.")
-            }
+                .padding(.top, 28)
+                .accessibilityAddTraits(.isHeader)
+            Text("Make a vow with friends and stake points on it. Miss a day and your stake goes to the ones who kept theirs.")
+                .font(Typeface.body)
+                .foregroundStyle(Palette.text2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 10)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 40)
     }
 
-    private func heroLine(_ text: String) -> some View {
-        Text(text)
-            .font(Theme.display(15, .regular))
-            .foregroundStyle(Color.white.opacity(0.65))
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var footnote: some View {
-        Text("Groups sync through iCloud · points only")
-            .font(Theme.mono(11, .medium))
-            .foregroundStyle(Color.white.opacity(0.35))
-            .frame(maxWidth: .infinity)
+    private var nameField: some View {
+        FormField("Your name", footer: "Shown to your groups.") {
+            VowField("Your name", text: $name, capitalization: .words, submitLabel: .continue)
+                .onSubmit(submit)
+        }
     }
 
     private func submit() {

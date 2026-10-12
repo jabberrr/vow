@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// New group form: name, your vow, daily stake and, in testing mode, the test-group toggle.
 struct CreateGroupSheet: View {
     /// Called with the new group's id just before the sheet dismisses itself.
     let onCreated: (GroupID) -> Void
@@ -26,57 +27,50 @@ struct CreateGroupSheet: View {
         !trimmedName.isEmpty && !trimmedVow.isEmpty
     }
 
+    /// The stake rule, phrased for the selected stake.
+    private var stakeFooter: String {
+        if stake == 1 {
+            return "Miss a day and your 1 pt goes to the ones who kept theirs."
+        }
+        return "Miss a day and your \(stake) pts go to the ones who kept theirs."
+    }
+
     var body: some View {
         SheetChrome(title: "New group") {
-            FieldSection("Group name") {
-                GlassField(placeholder: "Morning crew", text: $name, capitalization: .words)
-            }
-            FieldSection("Your vow") {
-                GlassField(placeholder: "I will train for 30 minutes", text: $vow)
-            }
-            FieldSection("Daily stake") {
-                stakeChips
-            }
+            nameField
+            vowField
+            stakeField
             if store.testingMode {
-                testToggle
+                testField
             }
-            footer
+            if let message = errorText {
+                ErrorText(message)
+            }
+            PrimaryButton("Create group", busy: busy, enabled: canCreate, action: create)
         }
     }
 
-    private var stakeChips: some View {
-        HStack(spacing: 10) {
-            ForEach(Points.stakeOptions, id: \.self) { option in
-                StakeChip(label: GroupFormat.stake(option), selected: option == stake) {
-                    stake = option
-                }
-            }
+    private var nameField: some View {
+        FormField("Name") {
+            VowField("Name", text: $name, placeholder: "Morning run", capitalization: .words, autoFocus: true)
         }
     }
 
-    private var testToggle: some View {
-        Toggle(isOn: $isTest) {
-            Text("Test group (advance days manually)")
-                .font(Theme.display(15, .medium))
-                .foregroundStyle(Color.white.opacity(0.9))
+    private var vowField: some View {
+        FormField("Your vow") {
+            VowField("Your vow", text: $vow, placeholder: "I will run 5k before work")
         }
-        .tint(Theme.cyan)
-        .glassCard(padding: 16, radius: 18)
     }
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let text = errorText {
-                Text(text)
-                    .font(Theme.mono(12, .medium))
-                    .foregroundStyle(Theme.pink)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            PrimaryButton(title: "Create group", busy: busy, enabled: canCreate, action: create)
-            Text("Everyone who joins stakes " + GroupFormat.stake(stake) + " a day. Points only.")
-                .font(Theme.mono(11, .medium))
-                .foregroundStyle(Color.white.opacity(0.4))
-                .frame(maxWidth: .infinity)
+    private var stakeField: some View {
+        FormField("Daily stake", footer: stakeFooter) {
+            StakePicker(selection: $stake)
+        }
+    }
+
+    private var testField: some View {
+        FormField(footer: "Days move only when you tap Next day.") {
+            ToggleRow("Test group", isOn: $isTest)
         }
     }
 
@@ -95,7 +89,7 @@ struct CreateGroupSheet: View {
                 onCreated(newID)
                 dismiss()
             } else {
-                errorText = "Couldn't create the group. " + (store.lastError ?? "Check your iCloud connection and try again.")
+                errorText = "Couldn't create the group. " + (store.lastError ?? "Try again.")
             }
         }
     }

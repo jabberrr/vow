@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 
+/// Join a group from a pasted invite link. Prefills an iCloud share link from the pasteboard.
 struct JoinSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -18,30 +19,21 @@ struct JoinSheet: View {
     }
 
     var body: some View {
-        SheetChrome(title: "Join a group") {
-            Text("Paste the invite link a friend shared with you. Opening the link on this iPhone works too.")
-                .font(Theme.display(15, .regular))
-                .foregroundStyle(Color.white.opacity(0.65))
-                .fixedSize(horizontal: false, vertical: true)
-            FieldSection("Invite link") {
-                GlassField(
-                    placeholder: "https://www.icloud.com/share/…",
-                    text: $link,
-                    font: Theme.mono(14, .medium),
-                    capitalization: .never
-                )
-                .keyboardType(.URL)
-                .autocorrectionDisabled(true)
+        SheetChrome(title: "Join a group", subtitle: "Paste an invite link, or open it on this iPhone.") {
+            linkField
+            if let message = errorText {
+                ErrorText(message)
             }
-            if let text = errorText {
-                Text(text)
-                    .font(Theme.mono(12, .medium))
-                    .foregroundStyle(Theme.pink)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            PrimaryButton(title: "Join", busy: busy, enabled: url != nil, action: join)
+            PrimaryButton("Join", busy: busy, enabled: url != nil, action: join)
         }
+        .presentationDetents([.medium, .large])
         .onAppear(perform: prefill)
+    }
+
+    private var linkField: some View {
+        VowField("Invite link", text: $link, placeholder: "Invite link", capitalization: .never, monospaced: true)
+            .keyboardType(.URL)
+            .autocorrectionDisabled(true)
     }
 
     private func prefill() {
