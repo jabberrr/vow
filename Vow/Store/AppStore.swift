@@ -20,6 +20,12 @@ final class AppStore {
     private(set) var groupIDs: [GroupID] = []
     private(set) var snapshots: [GroupID: GroupSnapshot] = [:]
     private(set) var isRefreshing: Bool = false
+    /// When the last refreshAll finished (nil until the first one this session). UI timing only.
+    private(set) var lastSyncedAt: Date? = nil
+    /// The group of the most recent accepted invite, and a counter that changes on every acceptance,
+    /// so the UI can show that group even when you were already in it.
+    private(set) var lastAcceptedGroup: GroupID? = nil
+    private(set) var acceptCount: Int = 0
     var toast: String? = nil
     var pendingVowPrompt: GroupID? = nil
     /// The most recent create/join failure, shown inside the sheet (a toast would sit behind it).
@@ -185,6 +191,7 @@ final class AppStore {
         }
         reorder()
         persist()
+        lastSyncedAt = Date()
 
         if let e = firstError, !CloudErrors.isNetwork(e) {
             toast = CloudErrors.message(e)
@@ -255,6 +262,7 @@ final class AppStore {
         themeCache = [:]
         pendingVowPrompt = nil
         toast = nil
+        lastSyncedAt = nil
         // userID stays in memory (same iCloud account); groups reload on the next refreshAll.
     }
 
@@ -385,8 +393,10 @@ final class AppStore {
             let id: GroupID = try await cloud.accept(metadata)
             let s: GroupSnapshot = try await cloud.fetchSnapshot(id)
             upsert(merged(s, previous: snapshots[id]))
+            lastAcceptedGroup = id
+            acceptCount += 1
             if let m = myMember(id), m.leftDay == nil, !m.vow.isEmpty {
-                toast = "You're already in this group"
+                toast = "You're already in this group."
             } else {
                 pendingVowPrompt = id
             }
@@ -490,7 +500,7 @@ final class AppStore {
             try await cloud.saveGroup(g)
             setGroup(g)
             persist()
-            toast = "Group reset"
+            toast = "Group reset."
             await refresh(id)
         } catch {
             toast = CloudErrors.message(error)

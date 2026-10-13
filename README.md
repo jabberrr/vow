@@ -46,7 +46,7 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 **Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created. A cycle is 30 days, and the cycle is only used for display.
 
-**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with the **Invite** button. When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **Join with link** on the home screen.
+**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the seat after the members on a group's stage, or the vow's menu). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **Join with a link** (the **+** at the end of your vows, or the Menu).
 
 **Points.** At the end of each day:
 
@@ -57,7 +57,9 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 No device stores the results. Every device calculates them the same way from the shared check-in records (`Domain/Settlement.swift`), so everyone sees the same numbers. A check-in's time comes from the iCloud server (the record's creation date), not the phone's clock. A check-in that reaches the server up to 10 minutes after midnight still counts for the day before.
 
-**Testing mode.** Go to **Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** in the test bar. **Reset** asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
+**Reminders.** An optional daily local notification at a time you choose, only on days a vow is still open.
+
+**Testing mode.** Go to **Settings (⚙) → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** (under the members on its stage, or in the vow's menu). **Reset** asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
 
 ## Archive / TestFlight
 
@@ -73,20 +75,17 @@ The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`) and a single 1024×
 ```
 Vow/
   App/         Entry point (VowApp), root view, AppDelegate/SceneDelegate that pass accepted iCloud shares to the app
-  Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting
+  Design/      Tokens and components: Sphere, FlameStreak, ChainGrid, buttons, fields, sheet scaffold; formatters
+  Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting, streak milestones, cycle chain, digest, reminder plan
   Cloud/       CloudService (CloudKit zones, shares, records), record mapping, ShareInbox
-  Store/       AppStore (@Observable app state), snapshot cache, preferences
-  Home/        Balance, groups (with mini orbs), create group, join with link
-  Group/       Group screen (vow, orb, streak and cycle beads, crew, points, activity), invite, vow prompt, test bar
-  Settings/    Your name, testing mode, reset local data, version
-  Onboarding/  Pick a display name
-  Components/  Shared buttons, fields, status, sheet chrome, toast
-  Theme/       Palette, type, spacing, motion tokens and surfaces
+  Store/       AppStore (@Observable app state), snapshot cache, preferences, Overview and the stage helpers
+  Features/    Main (MainView, global bar, dock), Stage, Details, Menu and Settings, Sheets, Root (onboarding, launch, problem)
+  Reminders/   Daily reminder and its one-time offer
   Glyph/       Daily seed, constellation glyph and renderer
-  Orb/         OrbView: press-and-hold check-in, ring, burst, haptic; static (dormant and mini) orbs
+  Orb/         OrbView: press-and-hold check-in, ring, burst, haptic
   Sound/       SoundEngine: build-up tone and pop
   Info.plist, Vow.entitlements, Assets.xcassets
-VowTests/      XCTest unit tests (Domain: day math, settlement, formatting), hosted in Vow.app
+VowTests/      XCTest unit tests (Domain: day math, settlement, formatting, streaks, cycle chain, digest, reminder plan), hosted in Vow.app
 Config/        Vow.xcconfig (bundle ID + team, includes Local.xcconfig), Local.xcconfig.example
 project.yml               XcodeGen spec
 scripts/gen_xcodeproj.py  Python generator for Vow.xcodeproj that doesn't need XcodeGen

@@ -6,11 +6,17 @@ struct VowApp: App {
     @State private var store = AppStore()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Before launch finishes, so a reminder tap that launched the app reaches the delegate.
+        ReminderCenter.shared.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
-                .tint(Palette.accent)
+                .environment(ReminderCenter.shared)
+                .tint(Ink.text)
                 .preferredColorScheme(.dark)
                 .task {
                     if !isRunningTests {
@@ -34,6 +40,8 @@ struct VowApp: App {
     @MainActor
     private func handleScenePhase(_ newPhase: ScenePhase) {
         guard newPhase == .active, !isRunningTests else { return }
+        // Notifications may have been turned off in Settings meanwhile.
+        Task { await ReminderCenter.shared.refreshAuthorization() }
         switch store.phase {
         case .ready:
             Task { await store.refreshAll() }

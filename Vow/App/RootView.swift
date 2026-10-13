@@ -1,17 +1,23 @@
 import SwiftUI
 import Accessibility
 
+/// Picks the screen for the app's state. Owns the room-dim flag (set by the stage during a hold)
+/// and the toast, which waits while the room is dimmed and shows when the lights come back.
 struct RootView: View {
     @Environment(AppStore.self) private var store
-    @State private var toastText: String?
-    @State private var toastTask: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var roomDimmed: Bool = false
+    @State private var toastText: String? = nil
+    /// A toast that arrived during a hold.
+    @State private var heldToast: String? = nil
+    @State private var toastTask: Task<Void, Never>? = nil
 
     private enum Screen: Equatable {
         case onboarding
         case loading
         case noAccount(String)
         case failed(String)
-        case home
+        case main
     }
 
     private var screen: Screen {
@@ -20,29 +26,32 @@ struct RootView: View {
         }
         switch store.phase {
         case .checking:
-            return store.groupIDs.isEmpty ? .loading : .home
+            return store.groupIDs.isEmpty ? .loading : .main
         case .noAccount(let message):
             return .noAccount(message)
         case .failed(let message):
-            // With cached groups, stay on Home (it shows a retry banner).
-            return store.groupIDs.isEmpty ? .failed(message) : .home
+            // With cached groups, stay on the stage (it shows a retry banner).
+            return store.groupIDs.isEmpty ? .failed(message) : .main
         case .ready:
-            return .home
+            return .main
         }
     }
 
     var body: some View {
         ZStack {
-            Palette.bg
+            Ink.bg
                 .ignoresSafeArea()
             content
         }
-        .animation(Motion.screen, value: screen)
+        .animation(Anim.screen, value: screen)
         .overlay(alignment: .top) {
             toastOverlay
         }
         .onChange(of: store.toast) { _, newValue in
             handleToast(newValue)
+        }
+        .onChange(of: roomDimmed) { _, dimmed in
+            roomDimChanged(dimmed)
         }
         .onAppear {
             handleToast(store.toast)
@@ -56,59 +65,90 @@ struct RootView: View {
     private var content: some View {
         switch screen {
         case .onboarding:
-            OnboardingView()
+            OnboardingScreen()
                 .transition(.opacity)
         case .loading:
-            LoadingScreen()
+            LaunchScreen()
                 .transition(.opacity)
         case .noAccount(let message):
-            PhaseScreen(
-                systemImage: "icloud.slash",
-                title: "iCloud required",
-                message: message,
-                actionTitle: "Try again",
-                action: { Task { await store.bootstrap() } }
-            )
-            .transition(.opacity)
+            ProblemScreen(systemImage: "icloud.slash",
+                          title: "iCloud unavailable",
+                          message: message,
+                          onRetry: retry)
+                .transition(.opacity)
         case .failed(let message):
-            PhaseScreen(
-                systemImage: "exclamationmark.icloud",
-                title: "Can't reach iCloud",
-                message: message,
-                actionTitle: "Try again",
-                action: { Task { await store.bootstrap() } }
-            )
-            .transition(.opacity)
-        case .home:
-            HomeView()
+            ProblemScreen(systemImage: "exclamationmark.icloud",
+                          title: "Can't reach iCloud",
+                          message: message,
+                          onRetry: retry)
+                .transition(.opacity)
+        case .main:
+            MainView(roomDimmed: $roomDimmed)
                 .transition(.opacity)
         }
     }
 
-    /// Never takes touches, so a toast can't block Back, the gear or toolbar items.
+    // MARK: Toast
+
+    /// Under the pinned bar. A tap on the toast dismisses it (and never reaches the title menu
+    /// below); the empty overlay takes no touches. Hidden while the room is dimmed.
     private var toastOverlay: some View {
         VStack(spacing: 0) {
             if let text = toastText {
-                Toast(text: text)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                ToastBanner(text: text)
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        dismissToast()
+                    }
+                    .transition(toastTransition)
             }
         }
-        .padding(.top, 6)
-        .padding(.horizontal, 16)
-        .animation(Motion.toast, value: toastText)
-        .allowsHitTesting(false)
+        .padding(.top, 52)
+        .padding(.horizontal, Gap.barInset)
+        .opacity(roomDimmed ? 0 : 1)
+        .animation(Anim.toast, value: toastText)
+    }
+
+    private var toastTransition: AnyTransition {
+        if reduceMotion {
+            return AnyTransition.opacity
+        }
+        return AnyTransition.move(edge: .top).combined(with: .opacity)
     }
 
     private func handleToast(_ value: String?) {
-        guard let text = value else { return }
+        guard let text: String = value else { return }
         store.toast = nil
+        if roomDimmed {
+            heldToast = text
+            return
+        }
+        showToast(text)
+    }
+
+    private func roomDimChanged(_ dimmed: Bool) {
+        guard !dimmed, let text: String = heldToast else { return }
+        heldToast = nil
+        showToast(text)
+    }
+
+    private func showToast(_ text: String) {
         toastTask?.cancel()
         toastText = text
         AccessibilityNotification.Announcement(text).post()
         toastTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: Motion.toastNanos)
+            try? await Task.sleep(nanoseconds: Anim.toastNanos)
             if Task.isCancelled { return }
             toastText = nil
         }
+    }
+
+    private func dismissToast() {
+        toastTask?.cancel()
+        toastText = nil
+    }
+
+    private func retry() {
+        Task { await store.bootstrap() }
     }
 }
