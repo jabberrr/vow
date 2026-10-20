@@ -116,6 +116,9 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertEqual(dec.days[30].state, .kept)
         XCTAssertEqual(dec.days[30].date, date(1_767_157_200))       // 2025-12-31 00:00 EST
         XCTAssertEqual(dec.days[30].date, DayClock.start(ofDay: 0, group: group))
+        XCTAssertEqual(dec.days[0].groupDay, -30)
+        XCTAssertEqual(dec.days[30].groupDay, 0)
+        XCTAssertEqual(jan.days[2].groupDay, 3)
         XCTAssertEqual(jan.days[0].state, .missed)
         XCTAssertEqual(jan.days[1].state, .kept)
         XCTAssertEqual(jan.days[2].state, .todayOpen)

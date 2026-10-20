@@ -411,6 +411,8 @@ final class AppStore {
 
     func setVow(_ vow: String, in id: GroupID) async {
         guard let uid = userID, let s = snapshots[id] else { return }
+        // A finished vow takes no new members or vows (only a link opened after the end gets here).
+        if EndDate.isFinished(s.group, now: Date()) { return }
         let text: String = vow.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let name: String = profile?.displayName ?? "Me"

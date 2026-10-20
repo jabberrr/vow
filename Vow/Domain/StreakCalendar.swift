@@ -27,6 +27,8 @@ struct CalendarDay: Equatable, Identifiable {
     let isFinal: Bool
     /// The first day of your current streak.
     let isStreakStart: Bool
+    /// The group day index of this date (negative before the group began); seeds a kept day's colours.
+    let groupDay: Int
 
     var id: Date { date }
 }
@@ -139,7 +141,8 @@ enum StreakCalendar {
                                     dayNumber: i + 1,
                                     state: state(ofDay: groupDay, context: context),
                                     isFinal: matches(groupDay, context.endDay),
-                                    isStreakStart: matches(groupDay, context.streakStart)))
+                                    isStreakStart: matches(groupDay, context.streakStart),
+                                    groupDay: groupDay))
         }
         return CalendarMonth(start: start, leadingBlanks: blanks, days: days)
     }
