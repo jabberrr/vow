@@ -1,6 +1,8 @@
 # CONTEXT.md: Vow
 
-A briefing for Claude Code sessions that work on Vow. Read all of it before you start a task. It is loaded through `CLAUDE.md`.
+A briefing for Claude Code sessions that work on Vow. `CLAUDE.md` imports it, so it loads automatically.
+
+Sections are numbered for scanning. **Code comments that cite "§7", "§6.10" or "SPEC §3" refer to an external design spec, not to this file** (see Known issues).
 
 ---
 
@@ -11,14 +13,15 @@ These rules apply to every session.
 1. **Use subagents, and finish with a critic.**
    - When a task allows it, do the work with the subagent setup you judge most efficient. Run independent work in parallel and keep dependent steps in order.
    - Split the work by area, not into arbitrary pieces. For example: Domain and tests, Cloud and Store, UI. Or: one agent researches, one implements, one writes tests.
-   - Skip subagents when they would cost more than they save, such as a one-line fix or a single-file change you already understand.
-   - **Always end with a critic subagent.** Give it the diff and the original goal. Ask it to check that:
+   - Subagents don't see your conversation. Brief each one with the goal, the files involved and the sections of this file that apply.
+   - Do trivial changes yourself, such as a typo or a one-line fix you fully understand.
+   - **Any non-trivial change ends with a critic subagent.** Give it the diff and the original goal. Ask it to check that:
      - the work is correct and meets the goal;
-     - it follows this file's invariants (§5) and code style (§7);
-     - nothing is half-finished: project not regenerated, README out of date, tests missing.
+     - it follows the Invariants (§5) and Code style (§7);
+     - nothing is half-finished: project not regenerated, README out of date, tests missing, this file not updated.
    - Fix what the critic finds before you commit. If you disagree with a finding, say why.
 2. **Write high-quality, polished code with a sensible structure.**
-   - Code should read as if the original author wrote it, following §7. Don't write code that merely works.
+   - Code should read as if the original author wrote it. Don't write code that merely works.
    - Put logic in the right layer (§4), name things precisely, avoid duplication, and delete what you replace.
    - Keep it efficient. Don't gold-plate, and don't widen the scope of the task.
 3. **Update this file after you finish something.**
@@ -26,7 +29,8 @@ These rules apply to every session.
    - Edit facts in place. Don't append a diary.
    - Remove anything that is no longer true.
 4. **Record new work habits when asked.**
-   - When the user asks for a new standing rule or work habit, add it to this section in the same format: a numbered, bold one-line rule, then a short explanation.
+   - When the user asks for a new standing rule or work habit, add it to this section in the same format.
+   - The format is a numbered, bold one-line rule, followed by indented bullets with the specifics.
 
 ---
 
@@ -42,14 +46,12 @@ These rules apply to every session.
   - Each group is a record zone in the owner's private database.
   - The zone is shared through a zone-wide `CKShare` that anyone with the link can join.
 - **No third-party dependencies.**
+- **iPhone only, portrait only, dark only.**
 - **Testing mode** (Settings → Testing mode) creates test groups whose day the owner advances by hand.
 
-`README.md` is the user-facing doc: setup, schema deployment and how points work. Keep it accurate when behaviour, setup or layout changes. Past commits always updated it.
+**State as of 2026-10:** about 12k lines of Swift. The latest major change, `cc4da4c`, redesigned the UI around a single **stage**. Settlement, points, the CloudKit schema, the orb, the glyph and sound were left unchanged by that redesign.
 
-**State as of 2026-10:**
-- About 11.7k lines of Swift: 72 app files and 8 test files.
-- The latest major change, `cc4da4c`, redesigned the UI around a single **stage**. Settlement, points, the CloudKit schema, the orb, the glyph and sound were left unchanged by that redesign.
-- Every commit so far was written by Claude sessions.
+**`README.md`** is the user-facing doc: setup, schema deployment, how points work and the repository layout. Keep it accurate whenever behaviour, setup or layout changes.
 
 ---
 
@@ -66,7 +68,7 @@ Vow/
   Orb/        Press-and-hold check-in: OrbView, OrbHoldController, OrbTiming, ring, burst, active and sealed orb
   Glyph/      DailySeed (deterministic daily theme), GlyphModel, GlyphView (Canvas)
   Sound/      SoundEngine: synthesized build-up tone and pop (AVAudioEngine, no assets)
-  Reminders/  ReminderCenter (local notifications and badge), ReminderOfferSheet
+  Reminders/  ReminderCenter (@MainActor @Observable: local notifications and badge), ReminderOfferSheet
   Info.plist  Explicit; CKSharingSupported. Vow.entitlements pins iCloud.app.dabora.vow. Assets.xcassets holds one 1024 px AppIcon.
 VowTests/     XCTest unit tests for Domain and Design/Formatters, hosted in Vow.app
 Config/       Vow.xcconfig (bundle ID app.dabora.vow, team), which #include?s the git-ignored Local.xcconfig
@@ -93,21 +95,26 @@ CloudKit zone ──CloudService/Records──▶ GroupSnapshot ──AppStore (
 - **Cloud does I/O only.**
   - `CloudService.shared` is a `final class: @unchecked Sendable` with async/await. It is not an actor.
   - It creates the container lazily, so unit tests never touch CloudKit.
-- **AppStore owns all app state.**
-  - It is `@MainActor @Observable final class`. State is `private(set)`. Bookkeeping fields are `@ObservationIgnored`.
-  - It is offline-first: with a cache it starts in `phase = .ready`.
-  - It makes optimistic check-ins: it inserts a pending one (`serverDate == nil`), saves it, then swaps in the server copy or rolls back.
+- **AppStore owns group and app state.** `ReminderCenter.shared` owns reminder state.
+  - AppStore is `@MainActor @Observable final class`. State is `private(set)`. Bookkeeping fields are `@ObservationIgnored`.
+  - **Offline first:** with a cached userID and cached snapshots, it starts in `phase = .ready`.
+  - **Optimistic check-ins:** it inserts a pending check-in (`serverDate == nil`), saves it, then swaps in the server copy or rolls back.
   - `persist()` runs after mutations and strips pending check-ins.
   - `refreshAll()` fetches snapshots one at a time. It diffs against the keys it had at the start, so groups created, joined or removed during a refresh behave correctly. `merged()` keeps confirmed and in-flight check-ins.
-  - Errors go through `fail()`, which sets `lastError` (shown in sheets) and `toast`. Network errors are suppressed when a cache exists.
+  - **There are two error paths:**
+    - Create, join and accept go through `fail()`, which sets `lastError` (shown inside `NewGroupSheet` and `JoinLinkSheet`) and `toast`.
+    - Everything else sets `toast = CloudErrors.message(error)` directly.
+    - Network errors are suppressed when a cache exists.
+  - **Settlement is not cheap.** Every `summary(for:)` or `summaries(now:)` call runs a full Settlement pass. Compute once per render and pass the result down. MainView memoizes it per minute (`SummaryMemo`).
 - **Views use the environment for shared objects.**
   - They get `@Environment(AppStore.self)` and `@Environment(ReminderCenter.self)`, injected in `VowApp`.
   - Child views take plain values and closures (for example the `StageActions` struct), with explicit `init`s.
   - Never use `ObservableObject`, `@EnvironmentObject` or `@Bindable`.
+- **Unit tests are hosted in the app.** Any launch-time side effect must return early when `AppStore.isRunningUnitTests` is true.
 
 **Screens**
 
-- `RootView` picks one of: onboarding (no profile), `LaunchScreen`, `ProblemScreen` (no account, or failed with no cache), or `MainView`.
+- `RootView` picks one of: onboarding (no profile), `LaunchScreen`, `ProblemScreen` (no account, or failed with no cache), or `MainView`. It also owns the toast and `roomDimmed`.
 - `MainView`:
   - Contains a `NavigationStack` with the nav bar hidden.
   - `GlobalBar` is a top inset showing the total balance (which opens the menu) and settings.
@@ -118,6 +125,7 @@ CloudKit zone ──CloudService/Records──▶ GroupSnapshot ──AppStore (
   - One `MainSheet` enum drives a single `.sheet(item:)`.
   - **Always open sheets through `MainView.present(_:)`.** It queues a sheet while another is dismissing. The queue state (`showing`, `sheet`, `nextSheet`, `promptReady`, `stageBusy`) is delicate.
   - Use `.vowSheet([...])` for detents and `SheetScaffold` for layout.
+- **Dimming during a hold:** everything except the vow and the orb dims. New stage UI must apply `.roomDim(_:)` (in `Styles.swift`).
 - **Share invites:** `SceneDelegate` → `ShareInbox.deliver` (buffered) → the handler that `AppStore.installShareHandler` installs after `bootstrap()` has an account → `acceptShare` → `pendingVowPrompt`.
 
 ---
@@ -143,7 +151,7 @@ All of these are verified in code. If a change needs to break one, raise it with
 - **It must be deterministic on every device:**
   - Deduplicate members by userID; the first one wins.
   - Sort by lowercased `displayName`, then userID.
-  - Keep ledger ids stable (`d<day>-<kind>-<userID>`).
+  - Keep ledger ids stable: `d<day>-<kind>-<userID>`, or `d<day>-split` and `d<day>-carry`.
   - Cap the ledger with `ledgerCap = 120`.
   - Nets always sum to −pot.
 - **Stake is immutable after a group is created,** because settlement applies it to every past day. Adding a "change stake" feature needs a settlement redesign.
@@ -158,28 +166,42 @@ All of these are verified in code. If a change needs to break one, raise it with
 - **Streaks:**
   - A streak is the trailing run of kept closed days, plus 1 if today is kept. An open today doesn't break a streak.
   - Milestones are `[3,7,14,30,50,100,150,200,250,300,365]`, then every 100 after that.
-- **Cycle:** a cycle is 30 days and is **display only**. The pot and nets never reset per cycle. The 30 is written twice: `Settlement.swift` (`currentDay / 30`) and `CycleChain.length`. Change both together.
+- **Cycle:** a cycle is 30 days and is **display only**. The pot and nets never reset per cycle.
+  - The 30 is hard-coded in five places: `Settlement.swift` (`currentDay / 30`), `CycleChain.length`, `Design/Chain.swift`, `Glyph/DailySeed.swift` and `StageHeader` ("Day N of 30").
+  - The daily theme is seeded from (cycle, day in cycle), so changing the length changes every day's colours.
 
-**CloudKit records and cache**
+**CloudKit records**
 
-- **Record and zone names are part of the protocol.** Never change them:
-  - Zone: `group-<UUID>`.
-  - Records: `group`, `member-<userID>`, `checkin-<epoch>-<userID>-<day>`.
-  - These deterministic names make saves idempotent.
+- **These names are part of the protocol.** Never rename them:
+  - Record types `Group`, `Member` and `CheckIn`, and their field names (`Records.swift`).
+  - Zone `group-<UUID>`.
+  - Records `group`, `member-<userID>` and `checkin-<epoch>-<userID>-<day>`. These deterministic names make saves idempotent.
 - **Field encoding:**
   - Ints and bools are stored as `Int64`.
   - `leftDay` is always written, with `-1` meaning active.
   - Decoding is lenient and falls back to defaults.
-- **Cache compatibility:** `SnapshotCache` decodes with `try?` and has no schema version. A non-optional field added to a Codable domain model silently **discards every user's cache**. Make new fields optional or give them decode defaults.
 
-**UI**
+**Local state**
 
-- **Ledger text:** `Features/Details/LedgerFormat` **parses the English ledger strings** that Domain produces ("Day N · … · −2 pts"). Change both sides together.
+- **Cache compatibility:**
+  - `SnapshotCache` decodes with `try?` and has no schema version. A new required field on a Codable domain model silently **discards every user's cache**.
+  - Synthesized `Decodable` ignores property default values. A new field must be `Optional`, or the type needs a custom `init(from:)`.
+- **Preferences:** every key is `vow.*`. Remove each new key in `Preferences.clearAll()` too, which "Reset local data" uses.
+
+**Text**
+
+- **Ledger text:**
+  - `Features/Details/LedgerFormat` parses the English ledger strings that Domain produces ("Day N · … · −2 pts").
+  - SettlementTests pin those strings.
+  - Change Domain, LedgerFormat and the tests together.
 - **Glyph:** `Glyph/DailySeed` uses an exact port of JS `mulberry32` and FNV-1a. It must stay bit-for-bit deterministic.
+
+**Orb and check-in**
+
 - **Orb timing:**
   - `OrbTiming.hold = 1.4` is the single source for the ring, completion and the build-up tone.
   - `OrbBridge` keeps the old names alive for `Orb/` only. `Motion.dimGateNanos` must equal `Anim.dimGateNanos`.
-  - The orb is remounted when the day changes or the group resets (`.id(orbKey)`).
+  - The orb is remounted when the day changes or the group resets: `.id(orbKey)` with the key `zoneName-epoch-currentDay`.
 - **Check-in reward cascade** (`StageScreen`, in this order):
   1. Settle.
   2. Streak +1 with a flare.
@@ -195,9 +217,7 @@ All of these are verified in code. If a change needs to break one, raise it with
 
 **Visual direction: "quiet room, bright orb"**
 
-- The app is dark only (`.preferredColorScheme(.dark)`).
 - Chrome is neutral. The orb is the only bright, colourful thing.
-- During a hold, everything except the vow and the orb dims.
 - **Colour always means something:** flame = streak, gain/loss = points, the day's orb colours = kept today.
 
 **Use the tokens in `Design/Tokens.swift`:**
@@ -211,7 +231,9 @@ All of these are verified in code. If a change needs to break one, raise it with
 | `Anim` | Named curves and the beat table in nanoseconds |
 | `StageMetrics` | Layout is compact when the safe-area height is under 700 |
 
-- Don't add raw colours or sizes. The existing exceptions are SF Symbol sizes and white/black opacity strokes.
+- **Colours** always come from `Ink`. The only exceptions are white/black opacity strokes and sheens.
+- **Corners** come from `Corner`, and **text styles** from `Fonts`.
+- **Spacing:** use `Gap` for new spacing. Small literal paddings exist in the code; don't add more.
 
 **Reuse the existing components:**
 
@@ -226,7 +248,7 @@ All of these are verified in code. If a change needs to break one, raise it with
 - **Colour only your own net.** Friends' nets stay `text2`, and the total balance is neutral. Only the morning "Yesterday" reveal is coloured.
 - **Keep it neutral and kind:**
   - No streak freezes, nudges, leaderboards or guilt-trip copy.
-  - Friends show as "Not yet", never "missed".
+  - In today's status, friends show as "Not yet", never "missed". The ledger does say "Maya missed".
 - **One engagement loop:** an optional daily local reminder, only on days a vow is still open. It is offered once, after the first real check-in.
 - **At risk** means the last 4 hours of the day (`DayWindow.atRiskSeconds`). It shows a flame ring and "· 3h left".
 
@@ -235,8 +257,12 @@ All of these are verified in code. If a change needs to break one, raise it with
 - Use sentence case.
 - End toasts and footers with a period ("Group created."). Buttons have no period.
 - Use " · " as a separator, "…" for ellipses and U+2212 "−" for negatives.
-- Points always read "pts" (`Points.format`), or "1 pt" where the formatters make it singular. Balances are signed unless zero.
-- Errors read "Couldn't X. " followed by `store.lastError`.
+- **Points** always read "pts" (`Points.format`), or "1 pt" where `PointsText` makes it singular.
+  - In the UI, `PointsText` signs balances unless they are zero.
+  - `Points.format(signed:)` prints "+0 pts".
+- **Errors** in the create and join sheets read "Couldn't X. " followed by `store.lastError`.
+
+**Haptics:** prefer `.sensoryFeedback`. The orb and `TestDayBar` use UIKit generators.
 
 **Accessibility (required)**
 
@@ -248,13 +274,15 @@ All of these are verified in code. If a change needs to break one, raise it with
 
 ---
 
-## 7. Code style (match it exactly)
+## 7. Code style (match it)
 
-- **Explicit types on almost every local and closure parameter:**
+Domain, Design and Features follow these conventions most strictly. Cloud, AppStore and Orb are looser; when you edit there, match the file you are in.
+
+- **Explicit types on locals and closure parameters:**
   - `let r: Double = …`
   - `{ (a: MemberInfo, b: MemberInfo) -> Bool in … }`
 - **Control flow:**
-  - Use an explicit `return`.
+  - In functions, use an explicit `return`. Computed view properties use an implicit return.
   - Prefer `for … where` loops over long map/filter chains.
   - Write single-line `guard … else { return }`.
 - **Namespaces and constants:**
@@ -263,14 +291,14 @@ All of these are verified in code. If a change needs to break one, raise it with
   - Singletons are `static let shared`.
 - **Access control:** use the default internal, plus `private` and `private(set)`. Don't use `public` or `fileprivate`.
 - **Comments:**
-  - No file headers. A file starts with its imports, then a `///` doc on the main type.
+  - No file headers. A file starts with its imports, then usually a `///` doc on the main type.
   - `///` docs are short and explain *why* and edge cases, often with a concrete example ("Day 13 · Maya missed · −2 pts").
   - Inline `//` comments are rare.
   - Write British spelling in comments ("colour").
   - Use `// MARK: - Section`. A few files use `// MARK: X`; prefer the dash.
 - **Views:**
   - Split `body` into small `private var`/`func` subviews. Private model structs go at the bottom of the file.
-  - Every internal View has an explicit `init`.
+  - Views in `Features/` and `Design/` have an explicit `init`. `Orb/` views use the memberwise init.
   - Time the cascade with `Task.sleep(nanoseconds: Anim.*Nanos)` and `Task.isCancelled` checks. Trigger one-shot animations with Int tokens (`flareToken`).
 - **Formatting:**
   - Use digit separators (`1_000_000`).
@@ -294,7 +322,7 @@ All of these are verified in code. If a change needs to break one, raise it with
   - `python3 scripts/gen_xcodeproj.py` to regenerate. Output is deterministic, and the script rejects duplicate Swift basenames.
   - `python3 scripts/gen_xcodeproj.py --check` to validate the committed project. It writes nothing.
 - **Keep the generators in sync.** `project.yml` and `scripts/gen_xcodeproj.py` must describe the same project, and nothing checks this automatically. Change both together.
-- **Never set `PRODUCT_BUNDLE_IDENTIFIER` or `DEVELOPMENT_TEAM` at target level.** They come only from `Config/Vow.xcconfig` and `Local.xcconfig`.
+- **Never set `PRODUCT_BUNDLE_IDENTIFIER` or `DEVELOPMENT_TEAM` on the Vow app target.** They come only from `Config/Vow.xcconfig` and `Local.xcconfig`. The VowTests target does set its own bundle ID (`app.dabora.vow.tests`), and that is correct.
 - **Validate plists with Python's `plistlib`.**
 - **After pushing, check CI** with the GitHub MCP tools (`actions_list`, `get_job_logs`).
 - **CI** (`.github/workflows/ios.yml`) runs on every push:
@@ -305,7 +333,13 @@ All of these are verified in code. If a change needs to break one, raise it with
 **Testing scope**
 
 - Tests cover Domain and `Design/Formatters` only.
-- AppStore (merge and race logic), CloudService, Records, SnapshotCache and ReminderCenter have **no tests**, so be extra careful there.
+- These have **no tests**, so be extra careful there:
+  - AppStore (merge and race logic)
+  - CloudService and Records
+  - SnapshotCache and Preferences
+  - ReminderCenter
+  - LedgerFormat
+  - DailySeed
 - Put new rules in Domain so they can be tested.
 
 **CloudKit schema changes**
@@ -349,32 +383,33 @@ All of these are verified in code unless marked otherwise. Fix them only when as
 **Dead code**
 
 - `AppStore.theme(for:)`, `themeCache` and `totalBalance` have no callers.
+- `MemberStatus` and `MemberStanding.status(isViewer:)` in `Standing.swift` are used only by tests, and they label friends "missed". Don't wire them into the UI.
 - `VowApp`'s `.onOpenURL` is likely dead. There is no `CFBundleURLTypes`, and share links arrive through `SceneDelegate`. Not confirmed on a device.
 
 **UI**
 
 - `InviteLinkSheet.copied` never resets, so a second Copy gives no haptic.
 - `OrbBurst` ignores Reduce Motion.
-- Haptics are mixed: UIKit generators in the orb and `TestDayBar`, `.sensoryFeedback` elsewhere.
 - The Tasks started by `FlameStreak.flare` and `VowDock.runPulse` are never cancelled on disappear.
 
-**Duplicated constants** (keep each pair equal)
+**Duplicated constants** (keep each set equal)
 
 - `Motion.dimGateNanos` and `Anim.dimGateNanos`
 - `MainView.crossfadeNanos` and `Anim.screen`
-- OrbView's literal 220 and `Gap.orbSlot`
+- The orb size: literal `220` throughout `Orb/`, and `Gap.orbSlot`
 - `vowTapPadding` in `StageCenter` and in `EmptyStage`
 - The 700 pt compact threshold, which is repeated in `OnboardingScreen`
-- The cycle length of 30 (§5)
+- The cycle length of 30, in five places (see Invariants)
 
 **Stale docs**
 
-- `Config/Local.xcconfig.example` and README line 43 (`iCloud.<bundle ID>`) still describe the container as `iCloud.<bundle ID>`. It is pinned to `iCloud.app.dabora.vow`.
+- `Config/Local.xcconfig.example` and README line 43 still describe the container as `iCloud.<bundle ID>`. It is pinned to `iCloud.app.dabora.vow`.
 - README says leaving a group "adds `Member.leftDay`", but `leftDay` is always written.
-- Two doc comments are out of date:
-  - `ToastBanner` says it "never takes touches", but RootView makes it tap-to-dismiss.
-  - `OrbHoldController.teardown` mentions `store.seal()`, but the closure now goes through `handleSealed` to `store.checkIn`.
-- Comments cite "SPEC §…" and "§6.x"/"§7" from a design spec that **isn't in the repo**. Treat them as labels.
+- Two doc comments in `OrbHoldController` are out of date:
+  - `teardown` mentions `store.seal()`, but the closure now goes through `handleSealed` to `store.checkIn`.
+  - It says the orb remounts on `.id(cycle-day)`, but the key is `zoneName-epoch-currentDay`.
+- `ToastBanner` says it "never takes touches", but RootView makes it tap-to-dismiss.
+- Code comments cite "SPEC §…" and "§6.x"/"§7" from a design spec that **isn't in the repo**. Treat them as labels.
 
 **Tests**
 
