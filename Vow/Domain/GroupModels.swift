@@ -18,6 +18,10 @@ struct GroupInfo: Codable, Equatable {
     var epoch: Int
     var ownerUserID: String
     var shareURL: URL?
+    /// Index of the vow's final day, inclusive, in the group's day clock (day 0 = creation day; test
+    /// groups count `testDay`). nil = no end. Last with a default so the memberwise init and old
+    /// caches (no "endDay" key) keep working.
+    var endDay: Int? = nil
 }
 
 struct MemberInfo: Codable, Equatable, Identifiable {

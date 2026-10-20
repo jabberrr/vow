@@ -316,7 +316,8 @@ final class AppStore {
 
     // MARK: - Groups
 
-    func createGroup(name: String, vow: String, stake: Int, isTest: Bool) async -> GroupID? {
+    /// `endDate`: any moment on the vow's final day (nil = no end). The earliest end is tomorrow.
+    func createGroup(name: String, vow: String, stake: Int, isTest: Bool, endDate: Date? = nil) async -> GroupID? {
         lastError = nil
         guard let uid = await ensureUserID() else { return nil }
         let groupName: String = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -331,7 +332,8 @@ final class AppStore {
             leftDay: nil
         )
         do {
-            let s: GroupSnapshot = try await cloud.createGroup(name: groupName, stake: stake, isTest: isTest, me: me)
+            let s: GroupSnapshot = try await cloud.createGroup(name: groupName, stake: stake, isTest: isTest,
+                                                               endDate: endDate, me: me)
             snapshots[s.group.id] = s
             groupIDs.removeAll(where: { $0 == s.group.id })
             groupIDs.insert(s.group.id, at: 0)
@@ -449,7 +451,10 @@ final class AppStore {
 
     func checkIn(_ id: GroupID) async {
         guard let uid = userID, let s = snapshots[id], let me = myMember(id), me.leftDay == nil else { return }
-        let day: Int = DayClock.currentDay(s.group, now: Date())
+        let now: Date = Date()
+        // After the final day nothing is open (Settlement would ignore the check-in anyway).
+        if EndDate.isFinished(s.group, now: now) { return }
+        let day: Int = DayClock.currentDay(s.group, now: now)
         let epoch: Int = s.group.epoch
         let already: Bool = s.checkIns.contains(where: { $0.userID == uid && $0.day == day && $0.epoch == epoch })
         if already { return }

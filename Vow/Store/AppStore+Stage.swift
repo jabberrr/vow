@@ -42,12 +42,13 @@ extension AppStore {
         return best
     }
 
-    /// Real groups where you are an active member with a vow, in store order.
+    /// Real, unfinished groups where you are an active member with a vow, in store order.
     func reminderGroups(_ all: [GroupID: GroupSummary]) -> [ReminderGroup] {
         var out: [ReminderGroup] = []
         for id in groupIDs {
             guard let snapshot: GroupSnapshot = snapshots[id], !snapshot.group.isTest,
-                  let viewer: MemberStanding = all[id]?.viewer, !viewer.vow.isEmpty else { continue }
+                  let summary: GroupSummary = all[id], !summary.isFinished,
+                  let viewer: MemberStanding = summary.viewer, !viewer.vow.isEmpty else { continue }
             out.append(ReminderGroup(id: id, name: snapshot.group.name, keptToday: viewer.checkedInToday, streak: viewer.streak))
         }
         return out

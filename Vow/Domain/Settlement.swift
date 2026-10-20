@@ -4,10 +4,14 @@ import Foundation
 enum Settlement {
     static let ledgerCap: Int = 120
 
-    /// A check-in counts if it is in the group's current epoch and either pending (no server date),
-    /// in a test group, or landed on its own day (or within the grace period into the next day).
+    /// A check-in counts if it is in the group's current epoch, not after the group's final day, and
+    /// either pending (no server date), in a test group, or landed on its own day (or within the grace
+    /// period into the next day).
     static func isValid(_ c: CheckInInfo, group: GroupInfo) -> Bool {
         if c.epoch != group.epoch || c.day < 0 {
+            return false
+        }
+        if let end: Int = group.endDay, c.day > end {
             return false
         }
         guard let served: Date = c.serverDate else {
@@ -31,7 +35,19 @@ enum Settlement {
 
     static func summarize(_ snapshot: GroupSnapshot, viewerID: String, now: Date) -> GroupSummary {
         let group: GroupInfo = snapshot.group
-        let currentDay: Int = DayClock.currentDay(group, now: now)
+        let clockDay: Int = DayClock.currentDay(group, now: now)
+        // The settlement horizon. Without an end date (or before it has passed) it is today, the open
+        // day. Once the final day has passed it is the day after it: days 0...endDay settle exactly as
+        // they would without an end, and nothing happens after them.
+        let isFinished: Bool
+        let currentDay: Int
+        if let end: Int = group.endDay, clockDay > end {
+            isFinished = true
+            currentDay = max(0, end + 1)
+        } else {
+            isFinished = false
+            currentDay = clockDay
+        }
         let stake: Double = Double(group.stake)
         let members: [MemberInfo] = orderedMembers(snapshot.members)
 
@@ -54,6 +70,11 @@ enum Settlement {
         var lines: [LedgerLine] = []   // chronological (oldest first)
 
         for day in 0...currentDay {
+            // A finished vow has no open day: nothing is recorded after its final day.
+            if isFinished && day == currentDay {
+                break
+            }
+
             let dayLabel: String = "Day \(day + 1) · "
 
             // Membership events.
@@ -178,7 +199,9 @@ enum Settlement {
                             totalForfeited: totalForfeited,
                             standings: standings,
                             ledger: ledger,
-                            viewer: viewer)
+                            viewer: viewer,
+                            endDay: group.endDay,
+                            isFinished: isFinished)
     }
 
     // MARK: - Rules

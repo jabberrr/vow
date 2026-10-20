@@ -65,6 +65,7 @@ struct LedgerLine: Identifiable, Equatable {
 }
 
 struct GroupSummary: Equatable {
+    /// Today's day index; once the vow is finished, the day after its final day (endDay + 1).
     let currentDay: Int
     /// currentDay / 30 + 1
     let cycle: Int
@@ -81,4 +82,8 @@ struct GroupSummary: Equatable {
     /// Newest first, capped at 120.
     let ledger: [LedgerLine]
     let viewer: MemberStanding?
+    /// GroupInfo.endDay: the vow's final day (inclusive); nil = no end.
+    var endDay: Int? = nil
+    /// The final day has passed: nothing is open and nothing settles any more.
+    var isFinished: Bool = false
 }

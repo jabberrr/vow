@@ -2,7 +2,8 @@ import CloudKit
 import Foundation
 
 /// CKRecord <-> domain mapping. Record layout is fixed by the shared contract:
-/// - "Group"   / "group"                               : name, stake, createdAt, timeZoneID, isTest, testDay, epoch, ownerUserID
+/// - "Group"   / "group"                               : name, stake, createdAt, timeZoneID, isTest, testDay, epoch, ownerUserID,
+///                                                       endDay (optional: the final day's index; absent = no end)
 /// - "Member"  / "member-<userID>"                     : userID, displayName, vow, joinedDay, joinedEpoch, leftDay (-1 = active)
 /// - "CheckIn" / "checkin-<epoch>-<userID>-<day>"      : userID, day, epoch (server creationDate = trusted time)
 enum Records {
@@ -79,8 +80,16 @@ enum Records {
             testDay: int(record, "testDay") ?? 0,
             epoch: int(record, "epoch") ?? 0,
             ownerUserID: string(record, "ownerUserID") ?? "",
-            shareURL: nil
+            shareURL: nil,
+            endDay: endDay(record)
         )
+    }
+
+    /// endDay is optional: absent means the vow never ends. Values are clamped to
+    /// 0...EndDate.maxEndDay so a malformed record can't break the day math.
+    static func endDay(_ record: CKRecord) -> Int? {
+        guard let v = int(record, "endDay") else { return nil }
+        return min(max(v, 0), EndDate.maxEndDay)
     }
 
     static func apply(_ group: GroupInfo, to record: CKRecord) {
@@ -92,6 +101,12 @@ enum Records {
         record["testDay"] = number(group.testDay)
         record["epoch"] = number(group.epoch)
         record["ownerUserID"] = group.ownerUserID as CKRecordValue
+        if let end: Int = group.endDay {
+            record["endDay"] = number(end)
+        } else if int(record, "endDay") != nil {
+            // Only clear a value that is there: never touch the field on groups that have no end.
+            record.setObject(nil, forKey: "endDay")
+        }
     }
 
     // MARK: - Member

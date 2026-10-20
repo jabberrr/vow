@@ -12,8 +12,11 @@ enum Digest {
         return total
     }
 
-    /// You are an active member and haven't checked in today.
+    /// You are an active member, the vow isn't finished, and you haven't checked in today.
     static func isOpen(_ summary: GroupSummary) -> Bool {
+        if summary.isFinished {
+            return false
+        }
         guard let viewer: MemberStanding = summary.viewer else { return false }
         return !viewer.checkedInToday
     }

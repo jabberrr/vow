@@ -129,7 +129,9 @@ final class CloudService: @unchecked Sendable {
 
     // MARK: - Creating / joining
 
-    func createGroup(name: String, stake: Int, isTest: Bool, me: MemberInfo) async throws -> GroupSnapshot {
+    /// `endDate`: any moment on the vow's final day (nil = no end). It is stored as a day index in the
+    /// group's day clock, at least 1 (the earliest end is tomorrow).
+    func createGroup(name: String, stake: Int, isTest: Bool, endDate: Date?, me: MemberInfo) async throws -> GroupSnapshot {
         let zoneName: String = Records.zonePrefix + UUID().uuidString
         let zoneID = CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
         let zone = CKRecordZone(zoneID: zoneID)
@@ -146,17 +148,24 @@ final class CloudService: @unchecked Sendable {
 
         let id: GroupID = Records.groupID(zoneID)
         let now = Date()
+        let tz: String = TimeZone.current.identifier
+        var endDay: Int? = nil
+        if let end: Date = endDate {
+            let index: Int = DayClock.dayIndex(of: end, start: now, timeZoneID: tz)
+            endDay = min(max(1, index), EndDate.maxEndDay)
+        }
         var info = GroupInfo(
             id: id,
             name: name,
             stake: stake,
             createdAt: now,
-            timeZoneID: TimeZone.current.identifier,
+            timeZoneID: tz,
             isTest: isTest,
             testDay: 0,
             epoch: 0,
             ownerUserID: me.userID,
-            shareURL: nil
+            shareURL: nil,
+            endDay: endDay
         )
 
         let groupRecord = CKRecord(recordType: Records.groupType, recordID: Records.groupRecordID(id))
