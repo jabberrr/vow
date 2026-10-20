@@ -7,8 +7,6 @@ enum SphereState: Equatable {
     case open
     /// Not yet / not a member.
     case unlit
-    /// A missed closed day (chain only).
-    case missed
 }
 
 /// The app's one status shape, drawn with the orb's light model. Decorative (hidden from VoiceOver);
@@ -94,7 +92,7 @@ struct Sphere: View {
     private var unlitBody: some View {
         ZStack {
             Circle()
-                .fill(state == .missed ? Ink.missed : Ink.unlit)
+                .fill(Ink.unlit)
             Circle()
                 .fill(RadialGradient(
                     gradient: Gradient(stops: [
@@ -106,7 +104,7 @@ struct Sphere: View {
                     startRadius: 0,
                     endRadius: size))
             Circle()
-                .strokeBorder(state == .missed ? Ink.loss.opacity(0.45) : Color.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
         }
     }
 

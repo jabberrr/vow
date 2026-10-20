@@ -21,7 +21,6 @@ enum Ink {
     static let pressed: Color = Color(hex: 0x1F2330)
     static let avatar: Color = Color(hex: 0x2E3240)
     static let unlit: Color = Color(hex: 0x1A1D28)
-    static let missed: Color = Color(hex: 0x2A1A20)
     static let toast: Color = Color(hex: 0x262A36)
     static let hairline: Color = Color.white.opacity(0.07)
     static let text: Color = Color(hex: 0xF4F5F8)
@@ -36,6 +35,10 @@ enum Ink {
     static let flameGold: Color = Color(hex: 0xFFC24A)
     static let gain: Color = Color(hex: 0x4ADE9B)
     static let loss: Color = Color(hex: 0xFF7066)
+    /// Behind the sidebar.
+    static let scrim: Color = Color.black.opacity(0.45)
+    /// Edge of a kept day (as the milestone tag's border).
+    static let flameEdge: Color = Color(hex: 0xFFAA3C).opacity(0.35)
 
     /// Flame icon fill, top to bottom.
     static var flameGradient: LinearGradient {
@@ -45,6 +48,12 @@ enum Ink {
     /// Next-milestone bar fill, leading to trailing.
     static var milestoneGradient: LinearGradient {
         LinearGradient(colors: [Ink.flameMid, Ink.flameGold], startPoint: .leading, endPoint: .trailing)
+    }
+
+    /// Kept days in the streak calendar: the milestone tag's flame tint (one accent, the streak's colour).
+    static var flameTint: LinearGradient {
+        LinearGradient(colors: [Ink.flameMid.opacity(0.30), Ink.flameGold.opacity(0.20)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     /// Colour for the VIEWER's own points: > 0 gain, < 0 loss, 0 (after 2-decimal rounding) text2.
@@ -77,8 +86,8 @@ enum Fonts {
     static let footnoteSemibold: Font = Font.footnote.weight(.semibold)
     static let caption: Font = Font.caption.weight(.medium)
     static let captionBold: Font = Font.caption.weight(.bold)
-    /// "Total balance" / "Yesterday" label in the Menu button.
-    static let caption2Semibold: Font = Font.caption2.weight(.semibold)
+    /// Tab bar labels: fixed like the system tab bar (its Large Content Viewer covers large text).
+    static let tabLabel: Font = Font.system(size: 10, weight: .medium)
     static let mono: Font = Font.system(.subheadline, design: .monospaced, weight: .regular)
     static let numberSmall: Font = Font.system(.subheadline, design: .rounded, weight: .bold)
     static let numberMedium: Font = Font.system(.title3, design: .rounded, weight: .heavy)
@@ -104,11 +113,12 @@ enum Gap {
     static let barInset: CGFloat = 16
     static let hit: CGFloat = 44
     static let control: CGFloat = 52
-    static let dock: CGFloat = 60
+    static let tabBar: CGFloat = 49
+    static let sidebarMax: CGFloat = 320
     static let orbSlot: CGFloat = 220
 }
 
-/// Corner radii (always .continuous). Pills, chips and the dock are Capsules.
+/// Corner radii (always .continuous). Pills and chips are Capsules.
 enum Corner {
     static let card: CGFloat = 22
     static let banner: CGFloat = 18
@@ -132,6 +142,10 @@ enum Anim {
     static let dimIn: Animation = Animation.easeOut(duration: 0.3)
     static let dimOut: Animation = Animation.easeInOut(duration: 0.5)
     static let lightsUp: Animation = Animation.easeOut(duration: 0.25)
+    /// Sidebar in: quick, no visible overshoot. Out: a touch faster. Reduce Motion: a fade in place.
+    static let sidebarIn: Animation = Animation.spring(response: 0.3, dampingFraction: 0.9)
+    static let sidebarOut: Animation = Animation.spring(response: 0.25, dampingFraction: 1)
+    static let sidebarFade: Animation = Animation.easeOut(duration: 0.2)
 
     static let dimmedOpacity: Double = 0.12
 
@@ -144,42 +158,38 @@ enum Anim {
     static let offerNanos: UInt64 = 2_300_000_000
     static let hintNanos: UInt64 = 1_200_000_000
     static let toastNanos: UInt64 = 2_200_000_000
+    /// A toast kept waiting by a sheet, a dialog or the sidebar is dropped after this long.
+    static let toastWaitNanos: UInt64 = 1_500_000_000
     static let revealNanos: UInt64 = 2_500_000_000
     static let focusNanos: UInt64 = 350_000_000
     static let flareHoldNanos: UInt64 = 180_000_000
 }
 
 /// Stage spacing. Compact on short screens (safe-area height < 700 pt, e.g. iPhone SE 375×667),
-/// so that who kept today, names included, stays above the dock at default text size.
+/// so that who kept today, names included, stays above the tab bar at default text size.
 struct StageMetrics: Equatable {
     let compact: Bool
-    /// Vertical padding of the pinned global bar (bar row is 44).
+    /// Vertical padding of the pinned top bar (bar row is 44).
     let barPadding: CGFloat
     let vowTop: CGFloat
     let orbTop: CGFloat
     let streakTop: CGFloat
     let captionTop: CGFloat
-    /// Fixed gap between the caption and the member strip. Regular: the milestone tag lives inside it
-    /// for the session. Compact: the tag covers this gap plus the strip label for 3 s, then the label returns.
+    /// Fixed gap between the caption and the member strip; the milestone tag lives inside it for the day.
     let tagGap: CGFloat
     let tagOffset: CGFloat
     let stripRowTop: CGFloat
     let stripCell: CGFloat
-    let detailsTop: CGFloat
     let testBarHeight: CGFloat
-    /// Height of the fade above the dock band.
-    let dockFade: CGFloat
 
     static let regular: StageMetrics = StageMetrics(compact: false, barPadding: 4, vowTop: 14, orbTop: 18,
                                                     streakTop: 8, captionTop: 8, tagGap: 44, tagOffset: 6,
-                                                    stripRowTop: 12, stripCell: 56, detailsTop: 40,
-                                                    testBarHeight: 56, dockFade: 16)
+                                                    stripRowTop: 12, stripCell: 56, testBarHeight: 56)
     static let compactPreset: StageMetrics = StageMetrics(compact: true, barPadding: 2, vowTop: 8, orbTop: 8,
-                                                    streakTop: 2, captionTop: 6, tagGap: 16, tagOffset: 0,
-                                                    stripRowTop: 8, stripCell: 52, detailsTop: 32,
-                                                    testBarHeight: 48, dockFade: 8)
+                                                          streakTop: 2, captionTop: 6, tagGap: 44, tagOffset: 6,
+                                                          stripRowTop: 8, stripCell: 52, testBarHeight: 48)
 
-    /// `height` = the window's safe-area height (MainView's GeometryReader).
+    /// `height` = the window's safe-area height (the shell's GeometryReader).
     static func forHeight(_ height: CGFloat) -> StageMetrics {
         return height < 700 ? StageMetrics.compactPreset : StageMetrics.regular
     }

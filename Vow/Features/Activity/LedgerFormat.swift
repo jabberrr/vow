@@ -13,20 +13,8 @@ struct ActivityDay: Identifiable {
 /// View-layer formatting of the Domain ledger. Domain text is never edited (SettlementTests pin it);
 /// it is parsed here: "Day 13 · Maya missed · −2 pts" -> "Maya missed" with "−2 pts" in the right column.
 enum LedgerFormat {
-    /// The most recent SETTLED day (day < currentDay), ranked, capped at `limit`. nil if no day has settled.
-    /// Today's joins never appear here (they are in ActivityScreen).
-    static func preview(_ lines: [LedgerLine], group: GroupInfo, currentDay: Int, limit: Int = 5) -> ActivityDay? {
-        var latest: Int = -1
-        for line in lines where line.day < currentDay && line.day > latest {
-            latest = line.day
-        }
-        guard latest >= 0 else { return nil }
-        let dayLines: [LedgerLine] = lines.filter { $0.day == latest }
-        let top: [LedgerLine] = Array(ranked(dayLines).prefix(limit))
-        return ActivityDay(day: latest, title: dayTitle(latest, group: group, currentDay: currentDay), lines: top)
-    }
-
-    /// Every day in the ledger, newest day first, lines ranked within each day.
+    /// Every day in the ledger, newest day first, lines ranked within each day. `currentDay` only names
+    /// the days ("Today", "Yesterday").
     static func days(_ lines: [LedgerLine], group: GroupInfo, currentDay: Int) -> [ActivityDay] {
         var order: [Int] = []
         var buckets: [Int: [LedgerLine]] = [:]
@@ -69,10 +57,6 @@ enum LedgerFormat {
             return a.offset > b.offset
         }
         return sorted.map { (pair: (offset: Int, element: LedgerLine)) -> LedgerLine in pair.element }
-    }
-
-    static func dayTitle(_ day: Int, group: GroupInfo, currentDay: Int) -> String {
-        title(day, group: group, currentDay: currentDay, formatter: nil)
     }
 
     static func body(_ line: LedgerLine) -> String {

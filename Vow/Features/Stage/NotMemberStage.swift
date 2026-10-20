@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The stage of a vow you are not in yet (joined by link without a vow, or left): an unlit sphere in
-/// the orb's place, the stake rule, one way in, and the people already keeping it.
+/// the orb's place, the stake rule, one way in, and the people already keeping it. StageScreen centres
+/// it under the meta line, the same way as a member's stage. A finished vow shows `FinishedStage` instead.
 struct NotMemberStage: View {
     let group: GroupInfo
     let summary: GroupSummary
@@ -63,18 +64,15 @@ struct NotMemberStage: View {
             .padding(.horizontal, Gap.xxxl)
     }
 
-    /// Without you and without the Invite seat.
+    /// The members only: you are not one of them yet.
     private var strip: some View {
         MemberStrip(theme: theme,
                     standings: summary.standings,
                     viewerID: viewerID,
                     viewerLit: false,
                     atRisk: false,
-                    showsInvite: false,
                     cell: metrics.stripCell,
                     rowTop: metrics.stripRowTop,
-                    hidesLabel: false,
-                    onMember: onMember,
-                    onInvite: {})
+                    onMember: onMember)
     }
 }

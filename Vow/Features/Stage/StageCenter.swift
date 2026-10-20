@@ -24,8 +24,8 @@ struct StageCenter: View {
     let onFocusChange: (Bool) -> Void
     let onEarlyRelease: () -> Void
     let onEditVow: () -> Void
+    let onStreak: () -> Void
     let onMember: (String) -> Void
-    let onInvite: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize: DynamicTypeSize
@@ -49,8 +49,8 @@ struct StageCenter: View {
          onFocusChange: @escaping (Bool) -> Void,
          onEarlyRelease: @escaping () -> Void,
          onEditVow: @escaping () -> Void,
-         onMember: @escaping (String) -> Void,
-         onInvite: @escaping () -> Void) {
+         onStreak: @escaping () -> Void,
+         onMember: @escaping (String) -> Void) {
         self.group = group
         self.summary = summary
         self.viewer = viewer
@@ -70,8 +70,8 @@ struct StageCenter: View {
         self.onFocusChange = onFocusChange
         self.onEarlyRelease = onEarlyRelease
         self.onEditVow = onEditVow
+        self.onStreak = onStreak
         self.onMember = onMember
-        self.onInvite = onInvite
     }
 
     /// Invisible padding above and below the vow so its tap target is at least 44 pt; the stage
@@ -100,7 +100,7 @@ struct StageCenter: View {
 
     private var vowButton: some View {
         Button(action: onEditVow) {
-            vowText
+            StageCenter.vowText(viewer.vow)
                 .font(Fonts.vow)
                 .multilineTextAlignment(.center)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 3)
@@ -115,11 +115,11 @@ struct StageCenter: View {
         .accessibilityHint("Edit your vow")
     }
 
-    /// "I will" in text2 puts the weight on the verb.
-    private var vowText: Text {
-        let parts: (prefix: String, verb: String, suffix: String) = VowText.split(viewer.vow)
+    /// "I will" in text2 puts the weight on the verb. Also the finished stage's vow.
+    static func vowText(_ vow: String) -> Text {
+        let parts: (prefix: String, verb: String, suffix: String) = VowText.split(vow)
         if parts.verb.isEmpty {
-            return Text(viewer.vow).foregroundStyle(Ink.text)
+            return Text(vow).foregroundStyle(Ink.text)
         }
         let head: Text = Text(parts.prefix).foregroundStyle(Ink.text2)
         let rest: Text = Text(parts.verb + parts.suffix).foregroundStyle(Ink.text)
@@ -141,13 +141,26 @@ struct StageCenter: View {
 
     // MARK: - Streak
 
-    /// Capped at AX2 here, so the scaled numeral sees the cap. Embers are an overlay: no layout.
+    private var streakLabel: String {
+        shownStreak == 1 ? "1-day streak" : "\(shownStreak)-day streak"
+    }
+
+    /// The secondary way to the Streak tab. Capped at AX2 here, so the scaled numeral sees the cap. The
+    /// side padding only widens the target; embers are an overlay: neither changes the layout.
     private var streak: some View {
-        FlameStreak(count: shownStreak, size: metrics.compact ? .largeCompact : .large, flareToken: flareToken)
-            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-            .overlay {
-                EmberBurst(trigger: milestoneToken)
-            }
+        Button(action: onStreak) {
+            FlameStreak(count: shownStreak, size: metrics.compact ? .largeCompact : .large, flareToken: flareToken)
+                .padding(.horizontal, Gap.l)
+                .frame(minHeight: Gap.hit)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .overlay {
+            EmberBurst(trigger: milestoneToken)
+        }
+        .accessibilityLabel(streakLabel)
+        .accessibilityHint("Opens Streak")
     }
 
     // MARK: - Caption
@@ -199,7 +212,11 @@ struct StageCenter: View {
         return lead + time
     }
 
+    /// Nothing follows the vow's final day, so kept on it reads just "Kept today".
     private var keptCaption: Text {
+        if summary.endDay == summary.currentDay {
+            return Text("Kept today")
+        }
         guard let left: TimeInterval = DayWindow.secondsLeft(group, now: now) else {
             return Text("Kept today")
         }
@@ -222,12 +239,9 @@ struct StageCenter: View {
                     viewerID: viewerID,
                     viewerLit: viewerLit,
                     atRisk: atRisk,
-                    showsInvite: true,
                     cell: metrics.stripCell,
                     rowTop: metrics.stripRowTop,
-                    hidesLabel: metrics.compact && milestone != nil,
-                    onMember: onMember,
-                    onInvite: onInvite)
+                    onMember: onMember)
             .padding(.top, metrics.tagGap)
             .overlay(alignment: .top) {
                 tag
@@ -235,7 +249,7 @@ struct StageCenter: View {
             .roomDim(roomDimmed)
     }
 
-    /// Regular: inside the 44 pt gap (6 from its top). Compact: over the 16 pt gap and the strip label.
+    /// Inside the reserved gap (`tagOffset` from its top) on every screen size, for the rest of the day.
     @ViewBuilder
     private var tag: some View {
         if let event: StreakEvent = milestone {

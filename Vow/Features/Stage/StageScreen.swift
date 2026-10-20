@@ -1,48 +1,47 @@
 import SwiftUI
 import Accessibility
 
-/// Callbacks from a stage to MainView (which owns the sheets, navigation, the bar and the dock).
+/// Callbacks from Home to the shell, which owns the sheets, the confirmations, the tabs and the chrome.
 struct StageActions {
     let editVow: () -> Void
-    let invite: () -> Void
     let showMember: (String) -> Void
-    let showActivity: () -> Void
-    /// At the seal: MainView keeps this vow's dock chip unlit until didLight.
+    /// The streak was tapped: the shell selects the Streak tab.
+    let showStreak: () -> Void
+    /// TestDayBar's Reset: the shell confirms (MainDialog.resetTest).
+    let confirmReset: () -> Void
+    /// At the seal: the shell keeps this vow open everywhere (Streak tab, sidebar) until didLight.
     let willLight: () -> Void
-    /// At the social beat, and on revert, cancel or disappear: the dock chip may light.
+    /// At the social beat, and on revert, cancel or disappear: the shell lights the Streak tab's flame.
     let didLight: () -> Void
-    /// Seal + 2.0 s: pulse the next open vow in the dock.
+    /// Seal + 2.0 s: the shell pulses the ≡ glyph if another vow is still open.
     let didKeep: () -> Void
-    /// Seal + 2.3 s: the one-time reminder offer (MainView checks it is due).
+    /// Seal + 2.3 s: the one-time reminder offer, if due.
     let offerReminder: () -> Void
 }
 
-/// Where the cascade after a seal has got to (§7). `.done` is the resting state: everything shows
+/// Where the cascade after a seal has got to. `.done` is the resting state: everything shows
 /// the store's values. Compared through `rawValue`.
 enum KeepBeat: Int {
     case sealed = 1, settled, rewarded, social, done
 }
 
-/// One vow's stage (member, not-a-member or loading), its details, the check-in choreography,
-/// the test controls, the leave/delete dialogs and the 60 s refresh.
+/// Home: one vow's stage (member, not a member, finished or loading), centred between the bars, with the
+/// check-in choreography and the test controls. Sheets, confirmations, the banner and the periodic
+/// refresh belong to the shell; this view asks for them through `actions`.
 struct StageScreen: View {
     let id: GroupID
     @Binding var roomDimmed: Bool
     let metrics: StageMetrics
-    let scrollToTopToken: Int
+    /// Bumped by the shell when the Home tab is tapped again: scroll to the top.
+    let topToken: Int
     let actions: StageActions
 
     @Environment(AppStore.self) private var store
-    // Dialogs and test controls
-    @State private var confirmLeave: Bool = false
-    @State private var confirmDelete: Bool = false
-    @State private var confirmReset: Bool = false
     @State private var testBusy: Bool = false
     // Check-in choreography
     @State private var dimTask: Task<Void, Never>? = nil
     @State private var beatTask: Task<Void, Never>? = nil
     @State private var hintTask: Task<Void, Never>? = nil
-    @State private var tagTask: Task<Void, Never>? = nil
     @State private var awaitingSeal: Bool = false
     @State private var beat: KeepBeat = .done
     @State private var heldStreak: Int = 0
@@ -51,58 +50,28 @@ struct StageScreen: View {
     @State private var milestoneToken: Int = 0
     @State private var milestone: StreakEvent? = nil
     @State private var hintFlash: Bool = false
+    /// The keep's ≡ pulse and reminder offer, while their beat has not come yet. Leaving Home before
+    /// then delivers them at once instead of dropping them.
+    @State private var pulsePending: Bool = false
+    @State private var offerPending: Bool = false
 
-    init(id: GroupID, roomDimmed: Binding<Bool>, metrics: StageMetrics, scrollToTopToken: Int, actions: StageActions) {
+    init(id: GroupID, roomDimmed: Binding<Bool>, metrics: StageMetrics, topToken: Int, actions: StageActions) {
         self.id = id
         self._roomDimmed = roomDimmed
         self.metrics = metrics
-        self.scrollToTopToken = scrollToTopToken
+        self.topToken = topToken
         self.actions = actions
     }
 
     private static let topID: String = "stage-top"
-    private static let refreshNanos: UInt64 = 60_000_000_000
-    /// Compact screens: the milestone tag covers the strip label for this long, then the label returns.
-    private static let compactTagNanos: UInt64 = 3_000_000_000
-
-    var body: some View {
-        timeline
-            .confirmationDialog(leaveTitle, isPresented: $confirmLeave, titleVisibility: .visible) {
-                Button("Leave group", role: .destructive) {
-                    Task { await store.leave(id) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("You stop staking from today. Your past days stay in the group's activity.")
-            }
-            .confirmationDialog(deleteTitle, isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete group", role: .destructive) {
-                    Task { await store.deleteGroup(id) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This deletes the group and its history for everyone. You can't undo it.")
-            }
-            .confirmationDialog("Reset this test group?", isPresented: $confirmReset, titleVisibility: .visible) {
-                Button("Reset group", role: .destructive) {
-                    runTest { await store.resetTestGroup(id) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Everyone starts over from day 1. Check-ins, streaks and points are cleared.")
-            }
-    }
 
     /// The stage on a per-minute clock (caption, at-risk rings and the day roll over on time), with
-    /// the refresh loop, the reward haptics and the cleanup hooks.
-    private var timeline: some View {
+    /// the reward haptics and the cleanup hooks.
+    var body: some View {
         TimelineView(.everyMinute) { context in
             stage(now: context.date)
         }
         .vowBackground()
-        .task(id: id) {
-            await refreshLoop()
-        }
         .sensoryFeedback(.impact(weight: .light, intensity: 0.7), trigger: rewardToken)
         .sensoryFeedback(.success, trigger: milestoneToken)
         .onChange(of: id) { _, _ in
@@ -130,13 +99,15 @@ struct StageScreen: View {
         let sealed: Bool = summary.viewer?.checkedInToday ?? false
         let orbKey: String = StageScreen.orbKey(group: group, summary: summary)
         return ScrollViewReader { (proxy: ScrollViewProxy) in
-            ScrollView(.vertical, showsIndicators: false) {
-                column(group: group, summary: summary, now: now)
+            GeometryReader { (geometry: GeometryProxy) in
+                ScrollView(.vertical, showsIndicators: false) {
+                    page(group: group, summary: summary, now: now, height: geometry.size.height)
+                }
+                .refreshable {
+                    await store.refreshAll()
+                }
             }
-            .refreshable {
-                await store.refreshAll()
-            }
-            .onChange(of: scrollToTopToken) { _, _ in
+            .onChange(of: topToken) { _, _ in
                 withAnimation(Anim.standard) {
                     proxy.scrollTo(StageScreen.topID, anchor: .top)
                 }
@@ -155,73 +126,68 @@ struct StageScreen: View {
         return "\(group.id.zoneName)-\(group.epoch)-\(summary.currentDay)"
     }
 
-    private func column(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
+    /// The block is centred between the bars when it fits (the spacers share what is left) and scrolls
+    /// when it doesn't: accessibility sizes, or a test bar on a small screen.
+    private func page(group: GroupInfo, summary: GroupSummary, now: Date, height: CGFloat) -> some View {
         VStack(spacing: 0) {
-            banner
-            header(group: group, summary: summary)
-            if let viewer: MemberStanding = summary.viewer {
-                memberBody(group: group, summary: summary, viewer: viewer, now: now)
-            } else {
-                NotMemberStage(group: group,
-                               summary: summary,
-                               theme: Overview.theme(summary),
-                               viewerID: store.userID ?? "",
-                               metrics: metrics,
-                               onJoin: actions.editVow,
-                               onMember: actions.showMember)
-            }
+            Spacer(minLength: Gap.s)
+            block(group: group, summary: summary, now: now)
+            Spacer(minLength: Gap.xxl)
         }
-        .padding(.bottom, Gap.xxl)
+        .frame(maxWidth: .infinity, minHeight: height)
         .id(StageScreen.topID)
     }
 
-    /// Only with cached groups (the stage exists); without them RootView shows the problem screen.
+    /// The meta line, when it has something to say, over whichever stage applies.
+    private func block(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
+        VStack(spacing: 0) {
+            StageMeta(group: group, summary: summary, now: now)
+                .roomDim(roomDimmed)
+            content(group: group, summary: summary, now: now)
+        }
+    }
+
     @ViewBuilder
-    private var banner: some View {
-        if let message: String = failureMessage {
-            InlineBanner(systemImage: "exclamationmark.icloud", text: message, actionTitle: "Try again") {
-                Task { await store.bootstrap() }
-            }
-            .padding(.horizontal, Gap.l)
-            .padding(.top, Gap.xs)
-            .roomDim(roomDimmed)
+    private func content(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
+        if summary.isFinished {
+            finishedBody(group: group, summary: summary)
+        } else if let viewer: MemberStanding = summary.viewer {
+            memberBody(group: group, summary: summary, viewer: viewer, now: now)
+        } else {
+            NotMemberStage(group: group,
+                           summary: summary,
+                           theme: Overview.theme(summary),
+                           viewerID: store.userID ?? "",
+                           metrics: metrics,
+                           onJoin: actions.editVow,
+                           onMember: actions.showMember)
         }
     }
 
-    private func header(group: GroupInfo, summary: GroupSummary) -> some View {
-        StageHeader(group: group,
-                    summary: summary,
-                    isMember: summary.viewer != nil,
-                    isOwner: store.isOwner(id),
-                    canAdvance: isTestOwner(group),
-                    testBusy: testBusy,
-                    onEditVow: actions.editVow,
-                    onInvite: actions.invite,
-                    onRefresh: { Task { await store.refresh(id) } },
-                    onNextDay: advanceDay,
-                    onResetGroup: { confirmReset = true },
-                    onLeave: { confirmLeave = true },
-                    onDelete: { confirmDelete = true })
-            .roomDim(roomDimmed)
-    }
-
-    /// The center keeps zIndex 1 so the orb's burst draws over the test bar and the details.
+    /// The center keeps zIndex 1 so the orb's burst draws over the test bar.
     private func memberBody(group: GroupInfo, summary: GroupSummary, viewer: MemberStanding, now: Date) -> some View {
-        let lit: Bool = viewerLit(viewer)
-        let canAdvance: Bool = isTestOwner(group)
-        return VStack(spacing: 0) {
-            center(group: group, summary: summary, viewer: viewer, lit: lit, now: now)
+        VStack(spacing: 0) {
+            center(group: group, summary: summary, viewer: viewer, now: now)
                 .zIndex(1)
-            if canAdvance {
-                TestDayBar(metrics: metrics, busy: testBusy, onNextDay: advanceDay, onReset: { confirmReset = true })
-                    .padding(.top, metrics.compact ? 36 : Gap.l)
-                    .roomDim(roomDimmed)
+            if isTestOwner(group) {
+                testBar(canAdvance: true)
+                    .padding(.top, Gap.l)
             }
-            details(group: group, summary: summary, viewer: viewer, lit: lit, canAdvance: canAdvance)
         }
     }
 
-    private func center(group: GroupInfo, summary: GroupSummary, viewer: MemberStanding, lit: Bool, now: Date) -> some View {
+    /// A finished test vow keeps its bar, Next day disabled, so the owner can still reset it.
+    private func finishedBody(group: GroupInfo, summary: GroupSummary) -> some View {
+        VStack(spacing: 0) {
+            FinishedStage(summary: summary, metrics: metrics)
+            if isTestOwner(group) {
+                testBar(canAdvance: false)
+                    .padding(.top, Gap.xxl)
+            }
+        }
+    }
+
+    private func center(group: GroupInfo, summary: GroupSummary, viewer: MemberStanding, now: Date) -> some View {
         StageCenter(group: group,
                     summary: summary,
                     viewer: viewer,
@@ -232,7 +198,7 @@ struct StageScreen: View {
                     roomDimmed: roomDimmed,
                     shownStreak: shownStreak(viewer),
                     captionKept: captionKept(viewer),
-                    viewerLit: lit,
+                    viewerLit: viewerLit(viewer),
                     hintFlash: hintFlash,
                     flareToken: flareToken,
                     milestone: milestone,
@@ -241,41 +207,20 @@ struct StageScreen: View {
                     onFocusChange: focusChanged,
                     onEarlyRelease: earlyRelease,
                     onEditVow: actions.editVow,
-                    onMember: actions.showMember,
-                    onInvite: actions.invite)
+                    onStreak: showStreak,
+                    onMember: actions.showMember)
     }
 
-    private func details(group: GroupInfo, summary: GroupSummary, viewer: MemberStanding, lit: Bool, canAdvance: Bool) -> some View {
-        VStack(spacing: Gap.section) {
-            ProgressCard(viewer: viewer, summary: summary, todayLit: lit)
-            MembersCard(summary: summary, viewerID: store.userID ?? "", viewerLit: lit, onSelect: actions.showMember)
-            ActivityPreviewCard(group: group, summary: summary, canAdvance: canAdvance, onShowAll: actions.showActivity)
-        }
-        .padding(.horizontal, Gap.gutter)
-        .padding(.top, metrics.detailsTop)
-        .roomDim(roomDimmed)
+    private func testBar(canAdvance: Bool) -> some View {
+        TestDayBar(metrics: metrics,
+                   busy: testBusy,
+                   canAdvance: canAdvance,
+                   onNextDay: advanceDay,
+                   onReset: actions.confirmReset)
+            .roomDim(roomDimmed)
     }
 
     // MARK: - Derived
-
-    private var failureMessage: String? {
-        if case .failed(let message) = store.phase {
-            return message
-        }
-        return nil
-    }
-
-    private var groupName: String {
-        store.snapshots[id]?.group.name ?? "this group"
-    }
-
-    private var leaveTitle: String {
-        "Leave \(groupName)?"
-    }
-
-    private var deleteTitle: String {
-        "Delete \(groupName)?"
-    }
 
     /// Read at call time (focus changes, the seal), not from a captured body value.
     private var viewerSealed: Bool {
@@ -296,36 +241,34 @@ struct StageScreen: View {
         beat.rawValue >= KeepBeat.rewarded.rawValue ? viewer.streak : heldStreak
     }
 
-    /// Your sphere, today's bead and your members row light together at the social beat.
+    /// Your strip sphere and your place in the count light at the social beat, when the shell lights the
+    /// Streak tab's flame.
     private func viewerLit(_ viewer: MemberStanding) -> Bool {
         viewer.checkedInToday && beat.rawValue >= KeepBeat.social.rawValue
     }
 
-    // MARK: - Refresh and test controls
+    // MARK: - Taps
 
-    private func refreshLoop() async {
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: StageScreen.refreshNanos)
-            if Task.isCancelled { break }
-            await store.refresh(id)
-        }
+    /// Ignored while the room is dimmed: swapping the page then would take the orb off screen, and its
+    /// teardown drops a seal that has not been delivered yet.
+    private func showStreak() {
+        guard !roomDimmed else { return }
+        actions.showStreak()
     }
 
+    // MARK: - Test controls
+
+    /// One Next day at a time. Reset goes through the shell's confirmation.
     private func advanceDay() {
-        runTest { await store.advanceTestDay(id) }
-    }
-
-    /// One test action at a time, from the bar or the title menu.
-    private func runTest(_ work: @escaping @MainActor () async -> Void) {
         guard !testBusy else { return }
         testBusy = true
         Task { @MainActor in
-            await work()
+            await store.advanceTestDay(id)
             testBusy = false
         }
     }
 
-    // MARK: - Check-in choreography (§7)
+    // MARK: - Check-in choreography
 
     /// OrbView reports focus. The room only dims after 200 ms of steady pressure; a lift, movement
     /// or a scroll before then cancels it, so taps and scrolls never change the room.
@@ -376,7 +319,7 @@ struct StageScreen: View {
         startBeats()
     }
 
-    /// Seal + 0.12 settle, 0.25 reward, 0.45 social, 0.7 milestone, 2.0 next vow, 2.3 reminder offer.
+    /// Seal + 0.12 settle, 0.25 reward, 0.45 social, 0.7 milestone, 2.0 the ≡ pulse, 2.3 reminder offer.
     private func startBeats() {
         awaitingSeal = false
         beatTask?.cancel()
@@ -387,8 +330,9 @@ struct StageScreen: View {
             event = StreakEvents.event(streak: v.streak, history: v.history)
         }
         let found: StreakEvent? = event
-        let compact: Bool = metrics.compact
         let isTest: Bool = store.snapshots[id]?.group.isTest ?? true
+        pulsePending = true
+        offerPending = !isTest
         beatTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Anim.settleNanos)
             if Task.isCancelled { return }
@@ -409,55 +353,56 @@ struct StageScreen: View {
             try? await Task.sleep(nanoseconds: Anim.milestoneNanos - Anim.socialNanos)
             if Task.isCancelled { return }
             if let e: StreakEvent = found {
-                showMilestone(e, compact: compact)
+                showMilestone(e)
             }
             beat = .done
 
             try? await Task.sleep(nanoseconds: Anim.nextNanos - Anim.milestoneNanos)
             if Task.isCancelled { return }
+            pulsePending = false
             actions.didKeep()
 
             try? await Task.sleep(nanoseconds: Anim.offerNanos - Anim.nextNanos)
             if Task.isCancelled { return }
-            if !isTest {
+            if offerPending {
+                offerPending = false
                 actions.offerReminder()
             }
             beatTask = nil
         }
     }
 
-    /// Embers, the tag in its reserved gap and the success haptic. Compact: the tag leaves after 3 s.
-    private func showMilestone(_ event: StreakEvent, compact: Bool) {
+    /// Embers, the tag in its reserved gap (for the rest of the day) and the success haptic.
+    private func showMilestone(_ event: StreakEvent) {
         withAnimation(Anim.reward) { milestone = event }
         milestoneToken += 1
-        tagTask?.cancel()
-        tagTask = nil
-        guard compact else { return }
-        tagTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: StageScreen.compactTagNanos)
-            if Task.isCancelled { return }
-            withAnimation(Anim.fade) { milestone = nil }
-            tagTask = nil
-        }
     }
 
-    /// Ends the cascade wherever it is: everything shows the store's values and the dock chip may light.
+    /// Ends the cascade wherever it is: everything shows the store's values and the shell may light
+    /// the Streak tab's flame.
     private func finishBeats() {
         beatTask?.cancel()
         beatTask = nil
-        if let task: Task<Void, Never> = tagTask {
-            // The compact tag covers the strip label; never leave it there.
-            task.cancel()
-            tagTask = nil
-            milestone = nil
-        }
+        pulsePending = false
+        offerPending = false
         beat = .done
         actions.didLight()
     }
 
+    /// Leaving Home after a keep, before its last beats: they run now, each once. The ≡ pulse plays at
+    /// once; the reminder offer waits in the shell's presenter until nothing is up.
+    private func deliverPendingKeep() {
+        if pulsePending {
+            pulsePending = false
+            actions.didKeep()
+        }
+        if offerPending {
+            offerPending = false
+            actions.offerReminder()
+        }
+    }
+
     private func dayChanged() {
-        tagTask?.cancel()
-        tagTask = nil
         milestone = nil
     }
 
@@ -472,7 +417,8 @@ struct StageScreen: View {
         }
     }
 
-    /// On disappear (vow switch, push, leave) and on an id change: no task survives, the room is lit.
+    /// On disappear (another tab, another group, leave) and on an id change: no task survives, the
+    /// room is lit.
     private func resetChoreography() {
         dimTask?.cancel()
         dimTask = nil
@@ -480,6 +426,7 @@ struct StageScreen: View {
         hintTask = nil
         hintFlash = false
         awaitingSeal = false
+        deliverPendingKeep()
         finishBeats()
         if roomDimmed {
             roomDimmed = false

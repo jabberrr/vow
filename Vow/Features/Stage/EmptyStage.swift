@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// No groups yet: a stage waiting for its vow, on the same grid as a real one, with the one first
-/// decision where the daily action will be.
+/// decision where the daily action will be. Centred between the top bar and the bottom edge (there is
+/// no tab bar without a group); it scrolls when it doesn't fit.
 struct EmptyStage: View {
     let metrics: StageMetrics
     let onCreate: () -> Void
@@ -21,32 +22,39 @@ struct EmptyStage: View {
     private static let vowTapPadding: CGFloat = 8
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 0) {
-                // The title menu's row on a real stage.
-                Color.clear
-                    .frame(height: Gap.hit)
-                Text("Your first vow")
-                    .font(Fonts.footnoteMedium)
-                    .foregroundStyle(Ink.text2)
-                vowButton
-                    .padding(.top, metrics.vowTop - EmptyStage.vowTapPadding)
-                Sphere(theme: EmptyStage.theme, state: .unlit, size: EmptyStage.sphereSize, showsGlyph: true)
-                    .frame(width: Gap.orbSlot, height: Gap.orbSlot)
-                    .padding(.top, metrics.orbTop - EmptyStage.vowTapPadding)
-                PillButton("New group", systemImage: "plus", action: onCreate)
-                    .padding(.horizontal, Gap.gutter)
-                    .padding(.top, metrics.streakTop)
-                joinButton
-                    .padding(.top, Gap.m)
+        GeometryReader { (geometry: GeometryProxy) in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    Spacer(minLength: Gap.s)
+                    block
+                    Spacer(minLength: Gap.xxl)
+                }
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, Gap.xxl)
-        }
-        .refreshable {
-            await store.refreshAll()
+            .refreshable {
+                await store.refreshAll()
+            }
         }
         .vowBackground()
+    }
+
+    private var block: some View {
+        VStack(spacing: 0) {
+            Text("Your first vow")
+                .font(Fonts.footnoteMedium)
+                .foregroundStyle(Ink.text2)
+            vowButton
+                .padding(.top, metrics.vowTop - EmptyStage.vowTapPadding)
+            Sphere(theme: EmptyStage.theme, state: .unlit, size: EmptyStage.sphereSize, showsGlyph: true)
+                .frame(width: Gap.orbSlot, height: Gap.orbSlot)
+                .padding(.top, metrics.orbTop - EmptyStage.vowTapPadding)
+            PillButton("New group", systemImage: "plus", action: onCreate)
+                .padding(.horizontal, Gap.gutter)
+                .padding(.top, metrics.streakTop)
+            joinButton
+                .padding(.top, Gap.m)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var vowButton: some View {

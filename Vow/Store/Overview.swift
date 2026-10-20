@@ -46,27 +46,76 @@ enum Overview {
         return best
     }
 
-    /// Groups in which you are an active member.
-    static func vowCount(_ all: [GroupID: GroupSummary]) -> Int {
-        var n: Int = 0
-        for (_, summary) in all where summary.viewer != nil {
-            n += 1
-        }
-        return n
-    }
-
-    static func keptTodayCount(_ all: [GroupID: GroupSummary]) -> Int {
-        var n: Int = 0
-        for (_, summary) in all {
-            if summary.viewer?.checkedInToday == true {
-                n += 1
-            }
-        }
-        return n
-    }
-
     /// The day's orb colours without another Settlement pass (AppStore.theme(for:) does one).
     static func theme(_ summary: GroupSummary) -> DailyTheme {
         return DailyTheme.make(cycle: summary.cycle, day: summary.dayInCycle)
+    }
+}
+
+/// Today's state of one of your vows, as the sidebar rows show it.
+enum VowStatus: Equatable {
+    /// Your turn.
+    case open
+    /// Your turn, in the last 4 h of a real group's day (`DayWindow.atRiskSeconds`).
+    case atRisk
+    case kept
+    /// You are not a member yet (joined by link without a vow).
+    case notJoined
+    /// The final day has passed.
+    case finished
+}
+
+/// Your other vows still open today, in store order: the ≡ pulse after a keep, its VoiceOver value, and
+/// (when `atRisk`) its flame dot.
+struct MenuDot: Equatable {
+    let names: [String]
+    let atRisk: Bool
+
+    /// VoiceOver value of ≡: "Read Nightly is still open" / "2 other vows are still open".
+    var spoken: String {
+        if names.count == 1, let name: String = names.first {
+            return name + " is still open"
+        }
+        return "\(names.count) other vows are still open"
+    }
+}
+
+extension Overview {
+    /// `holdingLight`: you have just sealed this vow on Home and its light waits for the social beat.
+    static func status(_ summary: GroupSummary, group: GroupInfo, now: Date, holdingLight: Bool) -> VowStatus {
+        if summary.isFinished {
+            return .finished
+        }
+        guard let viewer: MemberStanding = summary.viewer else { return .notJoined }
+        if viewer.checkedInToday && !holdingLight {
+            return .kept
+        }
+        return DayWindow.isAtRisk(group, now: now) ? .atRisk : .open
+    }
+
+    /// nil when none of your vows other than `selected` is still open today.
+    static func menuDot(_ all: [GroupID: GroupSummary], groups: [GroupInfo], selected: GroupID?, now: Date) -> MenuDot? {
+        var names: [String] = []
+        var atRisk: Bool = false
+        for group in groups where group.id != selected {
+            guard let summary: GroupSummary = all[group.id] else { continue }
+            let state: VowStatus = status(summary, group: group, now: now, holdingLight: false)
+            if state == .open || state == .atRisk {
+                names.append(group.name)
+            }
+            if state == .atRisk {
+                atRisk = true
+            }
+        }
+        if names.isEmpty {
+            return nil
+        }
+        return MenuDot(names: names, atRisk: atRisk)
+    }
+
+    /// The orb colours of group day `day` (a calendar cell, the finished vow's final day).
+    static func theme(day: Int) -> DailyTheme {
+        let d: Int = max(0, day)
+        return DailyTheme.make(cycle: d / 30 + 1, day: d % 30 + 1)
     }
 }

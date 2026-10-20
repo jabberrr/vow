@@ -24,13 +24,10 @@ extension AppStore {
     }
 
     /// The open vow with the least time left (real groups before test groups; ties keep store order).
-    func mostUrgentGroupID(in all: [GroupID: GroupSummary], now: Date = Date(), excluding: GroupID? = nil) -> GroupID? {
+    func mostUrgentGroupID(in all: [GroupID: GroupSummary], now: Date = Date()) -> GroupID? {
         var best: GroupID? = nil
         var bestLeft: Double = 0
         for id in groupIDs {
-            if let skip: GroupID = excluding, skip == id {
-                continue
-            }
             guard let summary: GroupSummary = all[id], Digest.isOpen(summary),
                   let group: GroupInfo = snapshots[id]?.group else { continue }
             let left: Double = DayWindow.secondsLeft(group, now: now) ?? 1_000_000_000

@@ -2,32 +2,18 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Name, reminder, testing, about. Presented by the bar's gear and by the Menu's Settings button.
+/// Reminder, testing, about. Opened from the sidebar's Settings row; your name is edited in the Profile sheet.
 struct SettingsSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(ReminderCenter.self) private var reminders
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
-    @State private var name: String = ""
-    @State private var didLoad: Bool = false
     @State private var confirmReset: Bool = false
     /// While the permission prompt is up the switch stays on.
     @State private var enabling: Bool = false
-    /// A name was saved during this visit. The toast waits for the sheet to close (it would sit behind it).
-    @State private var savedName: Bool = false
-    /// Set by Reset local data: nothing is saved on the way out.
-    @State private var didReset: Bool = false
 
     init() {}
-
-    private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var canSaveName: Bool {
-        !trimmedName.isEmpty && trimmedName != (store.profile?.displayName ?? "")
-    }
 
     private var denied: Bool {
         reminders.authorization == .denied
@@ -72,8 +58,6 @@ struct SettingsSheet: View {
         } footer: {
             EmptyView()
         }
-        .onAppear(perform: load)
-        .onDisappear(perform: finish)
         .task {
             await reminders.refreshAuthorization()
         }
@@ -89,9 +73,7 @@ struct SettingsSheet: View {
 
     private var column: some View {
         VStack(alignment: .leading, spacing: 0) {
-            nameSection
             reminderSection
-                .padding(.top, Gap.xxl)
             testingSection
                 .padding(.top, Gap.xxl)
             aboutSection
@@ -100,17 +82,6 @@ struct SettingsSheet: View {
         .animation(Anim.fade, value: store.testingMode)
         .animation(Anim.fade, value: reminderOn)
         .animation(Anim.fade, value: denied)
-    }
-
-    // MARK: - Name
-
-    private var nameSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FieldLabel("Name")
-            VowTextField("Name", text: $name, capitalization: .words)
-                .onSubmit(saveName)
-            FieldFooter("Your groups see this.")
-        }
     }
 
     // MARK: - Reminder
@@ -208,27 +179,6 @@ struct SettingsSheet: View {
 
     // MARK: - Actions
 
-    private func load() {
-        guard !didLoad else { return }
-        didLoad = true
-        name = store.profile?.displayName ?? ""
-    }
-
-    private func saveName() {
-        guard !didReset, canSaveName else { return }
-        store.saveProfile(displayName: trimmedName)
-        savedName = true
-    }
-
-    /// On the way out: save a changed name, then confirm any save made during this visit.
-    private func finish() {
-        guard !didReset else { return }
-        saveName()
-        if savedName {
-            store.toast = "Name saved."
-        }
-    }
-
     private func setReminder(_ on: Bool) {
         guard !enabling else { return }
         if on {
@@ -263,7 +213,6 @@ struct SettingsSheet: View {
 
     /// The root then shows onboarding, which takes this sheet with it.
     private func resetLocalData() {
-        didReset = true
         store.resetLocalData()
         reminders.resetAfterLocalDataReset()
     }

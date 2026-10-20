@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Who kept today, at the moment of action: "2 of 5 kept today" over a row of faces lit in the day's
-/// colours (you: lit or ringed). Ends with an Invite seat for members. Wraps into rows instead of
-/// scrolling, so nobody is hidden.
+/// colours (you: lit or ringed). Only the people in the group: inviting lives on the Group page. Wraps
+/// into rows instead of scrolling, so nobody is hidden.
 struct MemberStrip: View {
     let theme: DailyTheme
     let standings: [MemberStanding]
@@ -10,36 +10,26 @@ struct MemberStrip: View {
     /// Your sphere and your place in the count light at the social beat, not at the seal.
     let viewerLit: Bool
     let atRisk: Bool
-    let showsInvite: Bool
     let cell: CGFloat
     let rowTop: CGFloat
-    /// Compact milestone: the tag covers the label for a moment.
-    let hidesLabel: Bool
     let onMember: (String) -> Void
-    let onInvite: () -> Void
 
     init(theme: DailyTheme,
          standings: [MemberStanding],
          viewerID: String,
          viewerLit: Bool,
          atRisk: Bool,
-         showsInvite: Bool,
          cell: CGFloat,
          rowTop: CGFloat,
-         hidesLabel: Bool,
-         onMember: @escaping (String) -> Void,
-         onInvite: @escaping () -> Void) {
+         onMember: @escaping (String) -> Void) {
         self.theme = theme
         self.standings = standings
         self.viewerID = viewerID
         self.viewerLit = viewerLit
         self.atRisk = atRisk
-        self.showsInvite = showsInvite
         self.cell = cell
         self.rowTop = rowTop
-        self.hidesLabel = hidesLabel
         self.onMember = onMember
-        self.onInvite = onInvite
     }
 
     /// One face in the strip.
@@ -93,9 +83,6 @@ struct MemberStrip: View {
             .multilineTextAlignment(.center)
             .rollingNumber(Double(keptCount))
             .padding(.horizontal, Gap.gutter)
-            .opacity(hidesLabel ? 0 : 1)
-            .animation(Anim.fade, value: hidesLabel)
-            .accessibilityHidden(hidesLabel)
     }
 
     // MARK: - Faces
@@ -130,13 +117,9 @@ struct MemberStrip: View {
         .padding(.horizontal, Gap.l)
     }
 
-    @ViewBuilder
     private func cellItems(_ faces: [Face]) -> some View {
         ForEach(faces) { (face: Face) in
             memberCell(face)
-        }
-        if showsInvite {
-            inviteSeat
         }
     }
 
@@ -173,32 +156,5 @@ struct MemberStrip: View {
             return "kept today"
         }
         return face.isYou ? "your turn" : "not yet"
-    }
-
-    /// A dashed empty seat: the group has room for one more.
-    private var inviteSeat: some View {
-        Button(action: onInvite) {
-            VStack(spacing: Gap.xs) {
-                ZStack {
-                    Circle()
-                        .strokeBorder(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(Ink.text2)
-                }
-                .frame(width: MemberStrip.sphereSize, height: MemberStrip.sphereSize)
-                Text("Invite")
-                    .font(Fonts.caption)
-                    .foregroundStyle(Ink.text3)
-                    .lineLimit(1)
-            }
-            .frame(width: cell)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressStyle())
-        .accessibilityLabel("Invite")
-        .accessibilityShowsLargeContentViewer {
-            Label("Invite", systemImage: "plus")
-        }
     }
 }

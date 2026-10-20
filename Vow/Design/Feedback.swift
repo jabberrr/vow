@@ -122,7 +122,7 @@ struct Tag: View {
         case .milestone:
             Capsule()
                 .fill(LinearGradient(colors: [Ink.flameMid.opacity(0.22), Ink.flameGold.opacity(0.22)], startPoint: .leading, endPoint: .trailing))
-                .overlay(Capsule().strokeBorder(Color(hex: 0xFFAA3C).opacity(0.35), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Ink.flameEdge, lineWidth: 1))
         }
     }
 }

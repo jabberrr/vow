@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One member (or you, with Edit vow): their vow, streak, best, net and this cycle as the orbs they
-/// lit. Only your own net is coloured. Reads the store live.
+/// One member (or you, with Edit vow): their vow, today's status, streak, best and net. Only your own
+/// net is coloured. Reads the store live.
 struct MemberSheet: View {
     let id: GroupID
     let userID: String
@@ -74,7 +74,11 @@ private struct MemberDetails: View {
         return head + rest
     }
 
-    private var status: String {
+    /// nil once the vow is finished: there is no today to report.
+    private var status: String? {
+        if summary.isFinished {
+            return nil
+        }
         if member.checkedInToday {
             return "Kept today"
         }
@@ -82,22 +86,31 @@ private struct MemberDetails: View {
     }
 
     private var spokenValue: String {
-        vow.isEmpty ? status : vow + ", " + status
+        var parts: [String] = []
+        if !vow.isEmpty {
+            parts.append(vow)
+        }
+        if let today: String = status {
+            parts.append(today)
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    /// A finished vow can't be edited (the store refuses), so the button goes with it.
+    private var canEditVow: Bool {
+        isYou && !summary.isFinished
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if isYou {
+            if canEditVow {
                 PillButton("Edit vow", systemImage: "pencil", kind: .secondary, compact: true, action: onEditVow)
                     .padding(.top, 14)
                     .padding(.leading, 70)
             }
             stats
                 .padding(.top, 22)
-            cycleTitle
-                .padding(.top, Gap.xxl)
-            chain
         }
     }
 
@@ -158,13 +171,13 @@ private struct MemberDetails: View {
     }
 
     private var streakColumn: some View {
-        statColumn(label: "Streak", spokenLabel: "Streak", spokenValue: ProgressCard.days(member.streak)) {
+        statColumn(label: "Streak", spokenLabel: "Streak", spokenValue: DayText.count(member.streak)) {
             FlameStreak(count: member.streak, size: .medium)
         }
     }
 
     private var bestColumn: some View {
-        statColumn(label: "Best", spokenLabel: "Best", spokenValue: ProgressCard.days(member.bestStreak)) {
+        statColumn(label: "Best", spokenLabel: "Best", spokenValue: DayText.count(member.bestStreak)) {
             Text("\(member.bestStreak)")
                 .font(Fonts.stat)
                 .monospacedDigit()
@@ -203,25 +216,5 @@ private struct MemberDetails: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
         .accessibilityValue(spokenValue)
-    }
-
-    // MARK: - Cycle
-
-    private var cycleTitle: some View {
-        Text("Cycle \(summary.cycle)")
-            .font(Fonts.subheadlineSemibold)
-            .foregroundStyle(Ink.text)
-            .padding(.horizontal, Gap.xs)
-            .padding(.bottom, 10)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    private var chain: some View {
-        ChainGrid(beads: CycleChain.beads(history: member.history,
-                                          currentDay: summary.currentDay,
-                                          checkedInToday: member.checkedInToday))
-            .padding(Gap.l)
-            .frame(maxWidth: .infinity)
-            .cardSurface()
     }
 }

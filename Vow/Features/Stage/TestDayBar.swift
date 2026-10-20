@@ -1,18 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// Test controls for the owner of a test group in testing mode: Next day (fills) and Reset (asks
-/// first; StageScreen owns the dialog and the busy guard it shares with the title menu). Sits in the
-/// content under the strip, so it can never cover who kept today.
+/// Test controls for the owner of a test group in testing mode, and the only place they live: Next day
+/// (fills) and Reset (the shell asks first). StageScreen owns Next day's busy guard. A finished test vow
+/// keeps the bar with Next day disabled, so it can still be reset. Sits in the content under the strip,
+/// so it can never cover who kept today.
 struct TestDayBar: View {
     let metrics: StageMetrics
     let busy: Bool
+    /// False once the vow is finished: nothing follows the final day.
+    let canAdvance: Bool
     let onNextDay: () -> Void
     let onReset: () -> Void
 
-    init(metrics: StageMetrics, busy: Bool, onNextDay: @escaping () -> Void, onReset: @escaping () -> Void) {
+    init(metrics: StageMetrics, busy: Bool, canAdvance: Bool, onNextDay: @escaping () -> Void, onReset: @escaping () -> Void) {
         self.metrics = metrics
         self.busy = busy
+        self.canAdvance = canAdvance
         self.onNextDay = onNextDay
         self.onReset = onReset
     }
@@ -20,6 +24,7 @@ struct TestDayBar: View {
     /// Inner padding of the bar; it is part of each button's target, so the targets fill the bar.
     private static let inset: CGFloat = 6
     private static let resetWidth: CGFloat = 100
+    private static let disabledOpacity: Double = 0.35
 
     private var buttonHeight: CGFloat {
         metrics.testBarHeight - 2 * TestDayBar.inset
@@ -45,11 +50,12 @@ struct TestDayBar: View {
             nextLabel
                 .frame(maxWidth: .infinity, minHeight: buttonHeight)
                 .background(Capsule().fill(Ink.primary))
+                .opacity(canAdvance ? 1 : TestDayBar.disabledOpacity)
                 .padding(.vertical, TestDayBar.inset)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
-        .disabled(busy)
+        .disabled(busy || !canAdvance)
         .accessibilityLabel("Next day")
     }
 

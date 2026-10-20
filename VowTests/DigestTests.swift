@@ -71,7 +71,5 @@ final class DigestTests: XCTestCase {
         XCTAssertEqual(Overview.yesterdayChange(all, tests: tests), 1.5, accuracy: 0.0001)
         XCTAssertEqual(Overview.daysKept(all, tests: tests), 4)
         XCTAssertEqual(Overview.bestStreak(all, tests: tests), 2)
-        XCTAssertEqual(Overview.vowCount(all), 2)
-        XCTAssertEqual(Overview.keptTodayCount(all), 2)
     }
 }

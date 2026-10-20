@@ -51,6 +51,9 @@ final class AppStore {
     @ObservationIgnored private var bootstrapInFlight: Bool = false
     @ObservationIgnored private var themeCache: [GroupID: DailyTheme] = [:]
     @ObservationIgnored private var inFlightCheckIns: Set<CheckInInfo> = []
+    /// Test groups with a Next day or a reset still running. Both save the whole group record, so either
+    /// is ignored while one runs: a late Next day can't write the old epoch back over a reset.
+    @ObservationIgnored private var testDayInFlight: Set<GroupID> = []
 
     init() {
         profile = prefs.loadProfile()
@@ -486,7 +489,9 @@ final class AppStore {
     }
 
     func advanceTestDay(_ id: GroupID) async {
-        guard isOwner(id), var g = snapshots[id]?.group, g.isTest else { return }
+        guard isOwner(id), !testDayInFlight.contains(id), var g = snapshots[id]?.group, g.isTest else { return }
+        testDayInFlight.insert(id)
+        defer { testDayInFlight.remove(id) }
         g.testDay += 1
         do {
             try await cloud.saveGroup(g)
@@ -500,7 +505,9 @@ final class AppStore {
     }
 
     func resetTestGroup(_ id: GroupID) async {
-        guard isOwner(id), var g = snapshots[id]?.group, g.isTest else { return }
+        guard isOwner(id), !testDayInFlight.contains(id), var g = snapshots[id]?.group, g.isTest else { return }
+        testDayInFlight.insert(id)
+        defer { testDayInFlight.remove(id) }
         g.epoch += 1
         g.testDay = 0
         do {

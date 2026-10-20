@@ -32,6 +32,7 @@ Debug builds run from Xcode use the CloudKit **Development** environment. There,
 
 - create a group,
 - join it from a second Apple ID,
+- create a group with an end date (this adds `Group.endDay`),
 - check in,
 - in a test group, advance a day and reset the group,
 - leave a group (this adds `Member.leftDay`).
@@ -44,9 +45,13 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 ## How it works
 
-**Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created. A cycle is 30 days, and the cycle is only used for display.
+**Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created.
 
-**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the seat after the members on a group's stage, or the vow's menu). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **Join with a link** (the **+** at the end of your vows, or the Menu).
+**Getting around.** The app opens on your most urgent open vow. Each group has four tabs: **Home** (your vow, the orb, your streak and who kept today), **Streak** (your streak and a month calendar of kept days), **Activity** (every day's points) and **Group** (members, invite, points, your vow, leave or delete). The sidebar (**≡**, or a swipe from the left edge) lists your groups, **Add group**, **Settings** and you with your total balance; tap your name to change it.
+
+**End dates.** A vow has no end unless you choose one when you create the group (**End date** → **Last day**). With an end date, Home shows "Day x of y" and the Streak calendar flags the last day. After the last day the vow is finished: nothing settles, nobody can check in and no reminders come. The end date is the field `Group.endDay`. Members still on an older build of the app keep settling days after the end until they update, so until then their numbers differ.
+
+**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the last row of the members on a group's **Group** tab). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **≡ → Add group → Join with a link**.
 
 **Points.** At the end of each day:
 
@@ -59,7 +64,7 @@ No device stores the results. Every device calculates them the same way from the
 
 **Reminders.** An optional daily local notification at a time you choose, only on days a vow is still open.
 
-**Testing mode.** Go to **Settings (⚙) → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** (under the members on its stage, or in the vow's menu). **Reset** asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
+**Testing mode.** Go to **≡ → Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** (the test bar under the members on its **Home** tab). **Reset**, beside it, asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
 
 ## Archive / TestFlight
 
@@ -75,17 +80,17 @@ The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`) and a single 1024×
 ```
 Vow/
   App/         Entry point (VowApp), root view, AppDelegate/SceneDelegate that pass accepted iCloud shares to the app
-  Design/      Tokens and components: Sphere, FlameStreak, ChainGrid, buttons, fields, sheet scaffold; formatters
-  Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting, streak milestones, cycle chain, digest, reminder plan
+  Design/      Tokens and components: Sphere, FlameStreak, buttons, fields, sheet scaffold; formatters
+  Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting, streak milestones, end date, streak calendar, cycle chain, digest, reminder plan
   Cloud/       CloudService (CloudKit zones, shares, records), record mapping, ShareInbox
   Store/       AppStore (@Observable app state), snapshot cache, preferences, Overview and the stage helpers
-  Features/    Main (MainView, global bar, dock), Stage, Details, Menu and Settings, Sheets, Root (onboarding, launch, problem)
+  Features/    Main (the shell: top bar, tab bar, sidebar, and the Presenter that shows every sheet), Stage (Home), Streak, Activity, Group, Menu (Settings, Profile), Sheets, Root (onboarding, launch, problem)
   Reminders/   Daily reminder and its one-time offer
   Glyph/       Daily seed, constellation glyph and renderer
   Orb/         OrbView: press-and-hold check-in, ring, burst, haptic
   Sound/       SoundEngine: build-up tone and pop
   Info.plist, Vow.entitlements, Assets.xcassets
-VowTests/      XCTest unit tests (Domain: day math, settlement, formatting, streaks, cycle chain, digest, reminder plan), hosted in Vow.app
+VowTests/      XCTest unit tests (Domain: day math, settlement, end date, streak calendar, formatting, streaks, cycle chain, digest, reminder plan; vow status), hosted in Vow.app
 Config/        Vow.xcconfig (bundle ID + team, includes Local.xcconfig), Local.xcconfig.example
 project.yml               XcodeGen spec
 scripts/gen_xcodeproj.py  Python generator for Vow.xcodeproj that doesn't need XcodeGen

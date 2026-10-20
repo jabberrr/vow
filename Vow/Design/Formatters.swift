@@ -144,3 +144,60 @@ enum MilestoneText {
         return text
     }
 }
+
+/// Dates as the group lives them (its time zone), in the device's language.
+enum DayText {
+    /// "Oct 8"; "Oct 8, 2025" when the date is not in `now`'s year.
+    static func date(_ date: Date, timeZoneID: String, now: Date, locale: Locale = Locale.current) -> String {
+        let calendar: Calendar = DayClock.calendar(timeZoneID)
+        let sameYear: Bool = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        return formatter(sameYear ? "MMMd" : "yMMMd", calendar: calendar, locale: locale).string(from: date)
+    }
+
+    /// "October 2026".
+    static func month(_ date: Date, timeZoneID: String, locale: Locale = Locale.current) -> String {
+        let calendar: Calendar = DayClock.calendar(timeZoneID)
+        return formatter("LLLLy", calendar: calendar, locale: locale).string(from: date)
+    }
+
+    /// "October 8" (VoiceOver, calendar cells).
+    static func spoken(_ date: Date, timeZoneID: String, locale: Locale = Locale.current) -> String {
+        let calendar: Calendar = DayClock.calendar(timeZoneID)
+        return formatter("MMMMd", calendar: calendar, locale: locale).string(from: date)
+    }
+
+    /// "Since today" / "Since Oct 8": when the current streak began.
+    static func since(_ start: Date, today: Date, timeZoneID: String, locale: Locale = Locale.current) -> String {
+        let calendar: Calendar = DayClock.calendar(timeZoneID)
+        if calendar.isDate(start, inSameDayAs: today) {
+            return "Since today"
+        }
+        return "Since " + date(start, timeZoneID: timeZoneID, now: today, locale: locale)
+    }
+
+    /// The vow's final day: "Oct 30", or "Day 30" in a test group (its days are moved by hand); nil without an end.
+    static func finalDay(_ group: GroupInfo, now: Date, locale: Locale = Locale.current) -> String? {
+        guard let end: Int = group.endDay else { return nil }
+        if group.isTest {
+            return "Day \(end + 1)"
+        }
+        guard let day: Date = EndDate.finalDate(group) else { return nil }
+        return date(day, timeZoneID: group.timeZoneID, now: now, locale: locale)
+    }
+
+    /// "1 day", "30 days".
+    static func count(_ n: Int) -> String {
+        return n == 1 ? "1 day" : "\(n) days"
+    }
+
+    /// Locale first: setting it can reset the formatter's calendar to the locale's own, so the group's
+    /// Gregorian calendar and time zone go on after it.
+    private static func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+        let formatter: DateFormatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
+    }
+}
