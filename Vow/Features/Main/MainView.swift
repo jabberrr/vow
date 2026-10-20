@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// The signed-in app, as a shell: the pinned top bar, the selected group's page for the chosen tab, the
-/// tab bar and the sidebar overlay. It owns the selection, the tab, the 60 s refresh, the reminder sync
-/// and the `Presenter`, whose one sheet and one confirmation dialog are the only ones in the main
-/// experience: pages and chrome ask for them through closures.
+/// tab bar and the sidebar overlay, which stays mounted and only ever slides or fades. It owns the selection, the
+/// tab, the 60 s refresh, the reminder sync and the `Presenter`, whose one sheet and one confirmation
+/// dialog are the only ones in the main experience: pages and chrome ask for them through closures.
 struct MainView: View {
     @Binding var roomDimmed: Bool
     /// A sheet, a dialog or the sidebar is up: RootView's toast waits briefly, then it is dropped.
@@ -75,13 +75,14 @@ struct MainView: View {
     // MARK: - Layout
 
     /// `all` is computed once per minute or store change and passed down. A sheet's keyboard never
-    /// changes the metrics or lifts the tab bar behind it.
+    /// changes the metrics or lifts the tab bar behind it, so `bottomInset` is the home indicator's.
     private var shell: some View {
         TimelineView(.everyMinute) { context in
             GeometryReader { (proxy: GeometryProxy) in
                 screen(all: memo.summaries(store, now: context.date),
                        metrics: StageMetrics.forHeight(proxy.size.height),
                        panel: min(Gap.sidebarMax, proxy.size.width * 0.82),
+                       bottomInset: proxy.safeAreaInsets.bottom,
                        now: context.date)
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -89,15 +90,17 @@ struct MainView: View {
     }
 
     /// The main screen with the sidebar over it (an overlay: the page and the orb keep their place).
-    private func screen(all: [GroupID: GroupSummary], metrics: StageMetrics, panel: CGFloat, now: Date) -> some View {
+    private func screen(all: [GroupID: GroupSummary], metrics: StageMetrics, panel: CGFloat, bottomInset: CGFloat,
+                        now: Date) -> some View {
         ZStack(alignment: .topLeading) {
-            mainScreen(all: all, metrics: metrics, panel: panel, now: now)
-            sidebarLayer(all: all, panel: panel, now: now)
+            mainScreen(all: all, metrics: metrics, panel: panel, bottomInset: bottomInset, now: now)
+            sidebarLayer(all: all, panel: panel, bottomInset: bottomInset, now: now)
         }
     }
 
     /// The page between the pinned top bar and tab bar, with the edge zone along its leading side.
-    private func mainScreen(all: [GroupID: GroupSummary], metrics: StageMetrics, panel: CGFloat, now: Date) -> some View {
+    private func mainScreen(all: [GroupID: GroupSummary], metrics: StageMetrics, panel: CGFloat, bottomInset: CGFloat,
+                            now: Date) -> some View {
         page(metrics: metrics)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .leading) {
@@ -108,7 +111,7 @@ struct MainView: View {
                 topBar(all: all, metrics: metrics, now: now)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                tabBar(all: all)
+                tabBar(all: all, bottomInset: bottomInset)
             }
     }
 
@@ -135,11 +138,12 @@ struct MainView: View {
     /// Whenever a group's page is shown: members, not-members and finished vows alike, so the four tabs
     /// keep their places.
     @ViewBuilder
-    private func tabBar(all: [GroupID: GroupSummary]) -> some View {
+    private func tabBar(all: [GroupID: GroupSummary], bottomInset: CGFloat) -> some View {
         if let id: GroupID = shownID {
             VowTabBar(selection: tab,
                       streakLit: streakLit(id, all: all),
                       dimmed: roomDimmed,
+                      bottomInset: bottomInset,
                       onSelect: { (t: MainTab) in selectTab(t) })
         }
     }
@@ -192,21 +196,20 @@ struct MainView: View {
             .accessibilityHidden(true)
     }
 
-    /// The scrim and the panel, each with its own transition. Both carry the close drag.
-    private func sidebarLayer(all: [GroupID: GroupSummary], panel: CGFloat, now: Date) -> some View {
+    /// The scrim and the panel. Both stay mounted, so nothing is inserted or removed mid-slide: the panel's
+    /// offset and the scrim's opacity follow one state, and a slide that turns around or a drag that is
+    /// let go carries on from where the panel is. Both carry the close drag and take touches only while
+    /// the panel is shown.
+    private func sidebarLayer(all: [GroupID: GroupSummary], panel: CGFloat, bottomInset: CGFloat, now: Date) -> some View {
         ZStack(alignment: .leading) {
-            if sidebarShown {
-                scrim(panel: panel)
-                    .transition(.opacity)
-            }
-            if sidebarShown {
-                sidebar(all: all, now: now)
-                    .frame(width: panel)
-                    .frame(maxHeight: .infinity)
-                    .offset(x: panelOffset(panel))
-                    .simultaneousGesture(closeGesture(panel: panel))
-                    .transition(panelTransition)
-            }
+            scrim(panel: panel)
+            sidebar(all: all, bottomInset: bottomInset, now: now)
+                .frame(width: panel)
+                .frame(maxHeight: .infinity)
+                .offset(x: panelOffset(panel))
+                .opacity(reduceMotion ? panelProgress(panel) : 1)
+                .simultaneousGesture(closeGesture(panel: panel))
+                .allowsHitTesting(sidebarShown)
         }
     }
 
@@ -214,21 +217,25 @@ struct MainView: View {
     private func scrim(panel: CGFloat) -> some View {
         Ink.scrim
             .ignoresSafeArea()
-            .opacity(scrimOpacity(panel))
+            .opacity(panelProgress(panel))
             .contentShape(Rectangle())
             .onTapGesture {
                 setSidebar(false)
             }
             .simultaneousGesture(closeGesture(panel: panel))
+            .allowsHitTesting(sidebarShown)
             .accessibilityHidden(true)
     }
 
-    private func sidebar(all: [GroupID: GroupSummary], now: Date) -> some View {
+    private func sidebar(all: [GroupID: GroupSummary], bottomInset: CGFloat, now: Date) -> some View {
         Sidebar(all: all,
                 selected: selected,
                 holdingLightID: holdingLightID,
                 now: now,
+                isOpen: sidebarOpen,
+                isShown: sidebarShown,
                 canReveal: sidebarOpen && presenter.isIdle && !roomDimmed,
+                bottomInset: bottomInset,
                 onSelect: { (id: GroupID) in pickGroup(id) },
                 onCreate: { openFromSidebar(.create) },
                 onJoin: { openFromSidebar(.join) },
@@ -248,23 +255,29 @@ struct MainView: View {
         return drag.horizontalTravel
     }
 
-    private var panelTransition: AnyTransition {
-        reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .leading)
-    }
-
-    /// 0 at rest when open; otherwise where the finger has taken it.
-    private func panelOffset(_ panel: CGFloat) -> CGFloat {
+    /// How much of the panel's width is out: all of it when open, less while a drag pulls it back, what a
+    /// swipe from the edge has brought out, none when closed.
+    private func panelExtent(_ panel: CGFloat) -> CGFloat {
         if sidebarOpen {
-            return min(0, closeDrag?.horizontalTravel ?? 0)
+            return panel + min(0, closeDrag?.horizontalTravel ?? 0)
         }
-        return min(0, -panel + max(0, edgeTravel ?? 0))
+        return max(0, edgeTravel ?? 0)
     }
 
-    /// Follows the panel: clear when it is out of sight, full when it is all the way in.
-    private func scrimOpacity(_ panel: CGFloat) -> Double {
-        guard panel > 0 else { return 1 }
-        let shown: CGFloat = (panel + panelOffset(panel)) / panel
-        return Double(min(max(shown, 0), 1))
+    /// The trailing edge follows the finger. Closed, the panel is parked past its shadow as well, so no
+    /// trace of it is left at the screen's edge. Reduce Motion: it stays in place and fades instead.
+    private func panelOffset(_ panel: CGFloat) -> CGFloat {
+        if reduceMotion {
+            return 0
+        }
+        guard sidebarShown else { return -(panel + Sidebar.shadowReach) }
+        return min(0, panelExtent(panel) - panel)
+    }
+
+    /// 0 closed to 1 open: the scrim's opacity, and the panel's under Reduce Motion.
+    private func panelProgress(_ panel: CGFloat) -> Double {
+        guard panel > 0 else { return sidebarShown ? 1 : 0 }
+        return Double(min(max(panelExtent(panel) / panel, 0), 1))
     }
 
     /// Every slide first asks the presenter to start nothing for its length, so a sheet asked for from

@@ -84,6 +84,7 @@ struct StreakPage: View {
             StreakCalendarView(group: group,
                                summary: summary,
                                standing: viewer,
+                               now: now,
                                atRisk: DayWindow.isAtRisk(group, now: now),
                                homeToken: topToken)
                 .padding(.top, Gap.l)

@@ -103,9 +103,7 @@ struct StageScreen: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     page(group: group, summary: summary, now: now, height: geometry.size.height)
                 }
-                .refreshable {
-                    await store.refreshAll()
-                }
+                .scrollBounceBehavior(.basedOnSize)
             }
             .onChange(of: topToken) { _, _ in
                 withAnimation(Anim.standard) {
@@ -126,8 +124,9 @@ struct StageScreen: View {
         return "\(group.id.zoneName)-\(group.epoch)-\(summary.currentDay)"
     }
 
-    /// The block is centred between the bars when it fits (the spacers share what is left) and scrolls
-    /// when it doesn't: accessibility sizes, or a test bar on a small screen.
+    /// The block is centred between the bars when it fits (the spacers share what is left), and then the
+    /// page doesn't move at all: no bounce and no pull to refresh, which the shell's refresh makes
+    /// unnecessary. It scrolls only when it doesn't fit: accessibility sizes, or a test bar on a small screen.
     private func page(group: GroupInfo, summary: GroupSummary, now: Date, height: CGFloat) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: Gap.s)

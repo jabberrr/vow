@@ -3,20 +3,26 @@ import SwiftUI
 /// The selected group's four pages, pinned at the bottom. Custom rather than a `TabView`: it uses the
 /// app's tokens, dims with the room during a hold and avoids iOS 26's floating tab bar. Tint and fill
 /// carry the selection, as in iOS. The Streak flame lights (in the streak's own gradient) once you have
-/// kept today, from the social beat on.
+/// kept today, from the social beat on. The items sit centred in the bar you see, which runs on into the
+/// home-indicator inset, rather than in its top 49 pt.
 struct VowTabBar: View {
     let selection: MainTab
     let streakLit: Bool
     let dimmed: Bool
+    /// The home-indicator inset under the bar (0 on phones without one).
+    let bottomInset: CGFloat
     let onSelect: (MainTab) -> Void
 
-    private static let symbolFont: Font = Font.system(size: 22, weight: .medium)
+    /// Heavier than the flame's, whose outline already reads strongly at this size.
+    private static let symbolFont: Font = Font.system(size: 22, weight: .semibold)
+    private static let streakFont: Font = Font.system(size: 22, weight: .medium)
     private static let symbolHeight: CGFloat = 28
 
-    init(selection: MainTab, streakLit: Bool, dimmed: Bool, onSelect: @escaping (MainTab) -> Void) {
+    init(selection: MainTab, streakLit: Bool, dimmed: Bool, bottomInset: CGFloat, onSelect: @escaping (MainTab) -> Void) {
         self.selection = selection
         self.streakLit = streakLit
         self.dimmed = dimmed
+        self.bottomInset = bottomInset
         self.onSelect = onSelect
     }
 
@@ -27,6 +33,7 @@ struct VowTabBar: View {
             }
         }
         .frame(height: Gap.tabBar)
+        .offset(y: bottomInset / 2)
         .roomDim(dimmed)
         .frame(maxWidth: .infinity)
         .background(backing)
@@ -47,7 +54,9 @@ struct VowTabBar: View {
 
     // MARK: - Items
 
-    /// Fixed sizes like the system tab bar; a long press shows the Large Content Viewer instead.
+    /// Fixed sizes like the system tab bar; a long press shows the Large Content Viewer instead. Each item is
+    /// as tall as the bar you see, inset included (the row overhangs its 49 pt frame and is offset down
+    /// into the inset), so it can be tapped anywhere from the hairline to the screen's edge.
     private func item(_ tab: MainTab) -> some View {
         let selected: Bool = tab == selection
         return Button {
@@ -61,7 +70,8 @@ struct VowTabBar: View {
                     .foregroundStyle(selected ? Ink.text : Ink.text3)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, minHeight: Gap.tabBar)
+            .frame(maxWidth: .infinity)
+            .frame(height: Gap.tabBar + bottomInset)
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
@@ -84,8 +94,12 @@ struct VowTabBar: View {
 
     private func plainSymbol(_ tab: MainTab, selected: Bool) -> some View {
         Image(systemName: selected ? tab.selectedSymbol : tab.symbol)
-            .font(VowTabBar.symbolFont)
+            .font(VowTabBar.font(tab))
             .foregroundStyle(selected ? Ink.text : Ink.text3)
+    }
+
+    private static func font(_ tab: MainTab) -> Font {
+        return tab == .streak ? VowTabBar.streakFont : VowTabBar.symbolFont
     }
 
     /// Both images stay stacked and cross-fade, so the light-up at the social beat is soft (also under
@@ -95,7 +109,7 @@ struct VowTabBar: View {
             plainSymbol(.streak, selected: selected)
                 .opacity(streakLit ? 0 : 1)
             Image(systemName: MainTab.streak.selectedSymbol)
-                .font(VowTabBar.symbolFont)
+                .font(VowTabBar.streakFont)
                 .foregroundStyle(Ink.flameGradient)
                 .opacity(streakLit ? 1 : 0)
         }

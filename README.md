@@ -47,7 +47,7 @@ The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 **Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created.
 
-**Getting around.** The app opens on your most urgent open vow. Each group has four tabs: **Home** (your vow, the orb, your streak and who kept today), **Streak** (your streak and a month calendar of kept days), **Activity** (every day's points) and **Group** (members, invite, points, your vow, leave or delete). The sidebar (**≡**, or a swipe from the left edge) lists your groups, **Add group**, **Settings** and you with your total balance; tap your name to change it.
+**Getting around.** The app opens on your most urgent open vow. Each group has four tabs: **Home** (your vow, the orb, your streak and who kept today), **Streak** (your streak and a month calendar of kept days, from the month the group began to a year ahead), **Activity** (every day's points) and **Group** (members, invite, points, your vow, leave or delete). The sidebar (**≡**, or a swipe from the left edge) lists your groups, **Add group**, **Settings** and you with your total balance; tap your name to change it.
 
 **End dates.** A vow has no end unless you choose one when you create the group (**End date** → **Last day**). With an end date, Home shows "Day x of y" and the Streak calendar flags the last day. After the last day the vow is finished: nothing settles, nobody can check in and no reminders come. The end date is the field `Group.endDay`. Members still on an older build of the app keep settling days after the end until they update, so until then their numbers differ.
 

@@ -2,15 +2,23 @@ import SwiftUI
 
 /// The left panel: Add group (with its small menu), your groups with today's status, Settings, and you
 /// with your total balance. It holds what changes rarely or spans groups; the selected group's pages
-/// are one tab away. The shell owns the slide, the scrim, the gestures and the panel's width, and
-/// mounts this view only while the panel is out, so closing it always resets the Add menu.
+/// are one tab away. The shell owns the slide, the scrim, the gestures and the panel's width. It keeps
+/// this view mounted, so the panel slides (or, under Reduce Motion, fades) as one and nothing in it
+/// appears mid-slide; while closed it is out of sight and hidden from VoiceOver, and each new appearance
+/// starts with the Add menu closed.
 struct Sidebar: View {
     let all: [GroupID: GroupSummary]
     let selected: GroupID?
     let holdingLightID: GroupID?
     let now: Date
+    /// Open or opening: VoiceOver can reach the panel, and it is modal.
+    let isOpen: Bool
+    /// Open, or following a swipe from the edge. It turns true before the panel shows more than its edge.
+    let isShown: Bool
     /// The panel is open, nothing is up or coming and the room is lit: the balance can reveal yesterday.
     let canReveal: Bool
+    /// The home indicator's inset, which the footer dips into.
+    let bottomInset: CGFloat
     let onSelect: (GroupID) -> Void
     let onCreate: () -> Void
     let onJoin: () -> Void
@@ -24,11 +32,20 @@ struct Sidebar: View {
     @State private var menuOpen: Bool = false
     @AccessibilityFocusState private var addFocused: Bool
 
+    /// How far past its trailing edge the panel's shadow still shows (its offset plus twice its blur): the
+    /// shell parks a closed panel that much further out.
+    static let shadowReach: CGFloat = Sidebar.shadowX + 2 * Sidebar.shadowRadius
+    private static let shadowRadius: CGFloat = 24
+    private static let shadowX: CGFloat = 8
+
     init(all: [GroupID: GroupSummary],
          selected: GroupID?,
          holdingLightID: GroupID?,
          now: Date,
+         isOpen: Bool,
+         isShown: Bool,
          canReveal: Bool,
+         bottomInset: CGFloat,
          onSelect: @escaping (GroupID) -> Void,
          onCreate: @escaping () -> Void,
          onJoin: @escaping () -> Void,
@@ -39,7 +56,10 @@ struct Sidebar: View {
         self.selected = selected
         self.holdingLightID = holdingLightID
         self.now = now
+        self.isOpen = isOpen
+        self.isShown = isShown
         self.canReveal = canReveal
+        self.bottomInset = bottomInset
         self.onSelect = onSelect
         self.onCreate = onCreate
         self.onJoin = onJoin
@@ -55,14 +75,21 @@ struct Sidebar: View {
             lower
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea(.container, edges: .bottom)
         .background(panelBackground)
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(.isModal)
+        .accessibilityAddTraits(isOpen ? .isModal : [])
         .accessibilityAction(.escape) {
             escape()
         }
-        .onAppear {
-            addFocused = true
+        .accessibilityHidden(!isOpen)
+        .onChange(of: isShown) { (_: Bool, shown: Bool) in
+            if shown {
+                resetMenu()
+            }
+        }
+        .onChange(of: isOpen) { (_: Bool, open: Bool) in
+            addFocused = open
         }
     }
 
@@ -73,7 +100,7 @@ struct Sidebar: View {
                     .fill(Ink.hairline)
                     .frame(width: 1)
             }
-            .shadow(color: Color.black.opacity(0.4), radius: 24, x: 8, y: 0)
+            .shadow(color: Color.black.opacity(0.4), radius: Sidebar.shadowRadius, x: Sidebar.shadowX, y: 0)
             .ignoresSafeArea()
     }
 
@@ -131,7 +158,6 @@ struct Sidebar: View {
     private var veil: some View {
         Color.black
             .opacity(0.3)
-            .ignoresSafeArea(edges: .bottom)
             .contentShape(Rectangle())
             .onTapGesture {
                 closeMenu()
@@ -159,6 +185,18 @@ struct Sidebar: View {
     private func closeMenu() {
         guard menuOpen else { return }
         withAnimation(menuAnimation) {
+            menuOpen = false
+        }
+    }
+
+    /// A menu left open (New group and Join with a link close the panel under it) slides away with the
+    /// panel, and is put away without animation when the panel next shows, before more than its edge is
+    /// in sight.
+    private func resetMenu() {
+        guard menuOpen else { return }
+        var reset: Transaction = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) {
             menuOpen = false
         }
     }
@@ -213,7 +251,14 @@ struct Sidebar: View {
                        canReveal: canReveal,
                        action: onProfile)
         }
-        .padding(.bottom, Gap.s)
+        .padding(.bottom, footerBottom)
+    }
+
+    /// From the screen's bottom edge to the profile row, whose centre then sits level with the main
+    /// screen's tab-bar items: `VowTabBar` centres them in the bar you see, its `Gap.tabBar` plus the home
+    /// indicator's inset. Larger text grows the row upward. With no inset (iPhone SE), `Gap.s` above the edge.
+    private var footerBottom: CGFloat {
+        max((bottomInset + Gap.tabBar - SidebarMetrics.profile) / 2, Gap.s)
     }
 
     private var settingsRow: some View {
@@ -462,7 +507,7 @@ struct ProfileRow: View {
         Button(action: action) {
             content
                 .padding(.vertical, Gap.s)
-                .frame(minHeight: 60)
+                .frame(minHeight: SidebarMetrics.profile)
         }
         .buttonStyle(SidebarRowStyle(highlighted: false))
         .accessibilityLabel(name)
@@ -618,6 +663,8 @@ struct ProfileRow: View {
 private enum SidebarMetrics {
     static let lead: CGFloat = 32
     static let row: CGFloat = 52
+    /// The profile row, at default text sizes: the footer centres it on the tab bar's items.
+    static let profile: CGFloat = 60
 }
 
 /// Sidebar rows: inset 12 from the panel edges with 12 inside, the field fill when pressed or

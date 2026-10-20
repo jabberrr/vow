@@ -49,7 +49,7 @@ These rules apply to every session.
 - **iPhone only, portrait only, dark only.**
 - **Testing mode** (Settings → Testing mode) creates test groups whose day the owner advances by hand.
 
-**State as of 2026-10:** about 15k lines of Swift (tests included). `cc4da4c` redesigned the UI around a single **stage**. Round 3 added optional **end dates** (`f44253f`, `9b0bc7e`, `9a3980f`) and then replaced the dock and the cards under the stage with a **shell**: a top bar with ≡, four tabs per group (Home, Streak, Activity, Group) and a sidebar, with one `Presenter` for every sheet. Points, the orb, the glyph and sound were left unchanged; settlement changed only by the end-date stop rule.
+**State as of 2026-10:** about 15k lines of Swift (tests included). `cc4da4c` redesigned the UI around a single **stage**. Round 3 added optional **end dates** (`f44253f`, `9b0bc7e`, `9a3980f`) and then replaced the dock and the cards under the stage with a **shell**: a top bar with ≡, four tabs per group (Home, Streak, Activity, Group) and a sidebar, with one `Presenter` for every sheet. Round 4 polished that shell from device testing: an always-mounted sidebar, a connected flame streak calendar with a wider month range, a still Home page and a centred tab bar. Points, the orb, the glyph and sound were left unchanged; settlement changed only by the end-date stop rule.
 
 **`README.md`** is the user-facing doc: setup, schema deployment, how points work and the repository layout. Keep it accurate whenever behaviour, setup or layout changes.
 
@@ -122,12 +122,15 @@ CloudKit zone ──CloudService/Records──▶ GroupSnapshot ──AppStore (
 - `MainView` is the **shell**. It has **no `NavigationStack` and no push**:
   - A pinned `TopBar`: ≡ (opens the sidebar), the selected group's name, and the iCloud retry banner under it.
   - The selected group's page for the current `MainTab`: Home (`StageScreen`), `StreakPage`, `ActivityPage`, `GroupPage`. Pages are swapped instantly, not kept alive (the orb and its timers never run off screen). Re-tapping the selected tab bumps `topToken` (scroll to top). Switching group resets the tab to Home.
-  - A pinned custom `VowTabBar`, shown whenever a group's page is (not a `TabView`: it dims with the room and avoids iOS 26's floating tab bar). No groups: `EmptyStage` and no tab bar; first sync of a fresh install: a spinner.
-  - A `Sidebar` overlay: Add group (a custom menu: New group, Join with a link), your groups with today's status, Settings, and you with your balance. It opens from ≡ or a swipe from the 16 pt leading edge zone and closes on the scrim, a pick, a horizontal drag or VoiceOver escape. It is mounted only while out.
+  - A pinned custom `VowTabBar`, shown whenever a group's page is (not a `TabView`: it dims with the room and avoids iOS 26's floating tab bar). Its items are centred in the bar you see (`Gap.tabBar` plus the home-indicator inset, `bottomInset` from the shell's GeometryReader), not in its top 49 pt, and each is tappable over that whole height. No groups: `EmptyStage` and no tab bar; first sync of a fresh install: a spinner.
+  - A `Sidebar` overlay: Add group (a custom menu: New group, Join with a link), your groups with today's status, Settings, and you with your balance. It opens from ≡ or a swipe from the 16 pt leading edge zone and closes on the scrim, a pick, a horizontal drag or VoiceOver escape.
+    - It is always mounted. One state drives the panel's offset and the scrim's opacity (`panelExtent`/`panelOffset`/`panelProgress`); under Reduce Motion the panel stays put and fades. Nothing is inserted or removed mid-slide, so every row moves with the panel and a reversed slide or released drag carries on from where the panel is. Don't reintroduce `if` blocks or `.transition` for the panel or scrim.
+    - Closed, the panel is parked past its shadow (`Sidebar.shadowReach`). Touches follow `sidebarShown`; VoiceOver visibility and `.isModal` follow `isOpen`. Each appearance starts with the Add menu closed (reset when `isShown` turns true), opening moves VoiceOver focus to Add group, and the group list keeps its scroll position.
+    - Its footer dips into the home-indicator inset so the profile row's centre is level with the tab bar's items (`Sidebar.footerBottom`; `Gap.s` above the edge with no inset).
     - Its drags are `@GestureState`, so a drag the system cancels (a sheet, an alert, Control Center) resets itself; never hold a live drag in plain `@State`. Every close path works whenever the panel is visible, mid-drag included.
     - ≡ and the edge zone ignore input while the room is dimmed or the presenter isn't idle (a sheet must never rise over a reopened panel). An edge drag counts as busy for `.automatic` presentations.
     - A reminder tap waits while New group is open (not only while it saves): closing it would discard what you typed.
-  - The 60 s refresh of the shown group (`.task(id: shownID)`, only while its snapshot exists) lives in the shell, so it runs on every tab. Every page also has pull to refresh.
+  - The 60 s refresh of the shown group (`.task(id: shownID)`, only while its snapshot exists) lives in the shell, so it runs on every tab. Streak, Activity and Group also have pull to refresh. Home doesn't move at all when it fits (`.scrollBounceBehavior(.basedOnSize)`, no `.refreshable`) and scrolls only when it doesn't (accessibility sizes, a test bar on a small screen). `EmptyStage` keeps pull to refresh: with no group there is no 60 s refresh, so it is the only way to sync there.
 - **Sheets and dialogs:** the shell owns `Presenter` (`Features/Main/Presenter.swift`, which also declares `MainSheet`, `MainDialog` and `PresentSource`). Its one `.sheet(item:)` and one `.confirmationDialog` are the only ones in the main experience.
   - Pages and chrome call closures that the shell wires to `presenter.present(_:from: .screen)` or `confirm(_:from: .screen)`. `.screen` means a real tap on the main screen.
   - Sheet bodies close with `dismiss()` and chain with `from: .sheet` (Create → Invite, your member sheet → Edit vow). They may host their own dialog (Settings → Reset local data).
@@ -135,7 +138,7 @@ CloudKit zone ──CloudService/Records──▶ GroupSnapshot ──AppStore (
   - It can't wedge: presenting and dismissing end on a 1 s deadline even with no callback (a sheet whose content never appears is cleared and retried once), the latest tap wins and closes what is up, and nothing starts within a short settle after a dismissal or during `delay(for:)` (the shell's fade-in, every sidebar slide).
   - **Rules:** no SwiftUI `Menu` leads to a sheet or dialog (build a custom menu like `AddGroupMenu`; `from: .menu` exists for an unavoidable one and has no callers). Sheet bodies never render `EmptyView`: the content's `onAppear` is the presenter's proof that a sheet is up. No `fullScreenCover` from sheet bodies. No `presentationBackgroundInteraction(.enabled)` on shell sheets.
   - Check: `grep -rn "\.sheet(\|confirmationDialog(\|\.alert(\|fullScreenCover(\|\.popover(" Vow/Features` lists only `MainView` and sheet bodies.
-  - Use `.vowSheet([...])` for detents and `SheetScaffold` for layout.
+  - Use `.vowSheet([...])` for detents and `SheetScaffold` for layout. A sheet without a footer uses SheetScaffold's footer-less init; never pass `footer: { EmptyView() }`, which is still a bottom inset with an opaque backing (the prime suspect for the blank Settings sheet, see Known issues).
 - **Toast:** RootView holds a toast while the room is dimmed. While a sheet, a dialog or the sidebar is up (`toastBlocked`, from the shell), it waits at most `Anim.toastWaitNanos` (1.5 s) from when it was raised, then it is dropped. It sits below the measured top bar and takes no touches.
 - **Dimming during a hold:** everything except the vow and the orb dims, the top bar's and tab bar's contents included (their backings stay). New stage UI and chrome must apply `.roomDim(_:)` (in `Styles.swift`).
 - **Share invites:** `SceneDelegate` → `ShareInbox.deliver` (buffered) → the handler that `AppStore.installShareHandler` installs after `bootstrap()` has an account → `acceptShare` → `pendingVowPrompt` (observed with `initial: true`): the shell selects that group's Home, then presents its vow sheet from `.automatic`. For a finished group it only selects it. Already a member: `acceptCount` → that group's Home.
@@ -161,9 +164,9 @@ All of these are verified in code. If a change needs to break one, raise it with
   - `GroupInfo.endDay` (optional, the last stored property) is the index of the vow's final day, inclusive, in the group's day clock (test groups count `testDay`). nil means no end, the default.
   - It is set only at creation (`CloudService.createGroup(…endDate:…)`: at least 1, so the earliest end is tomorrow, and at most `EndDate.maxEndDay`) and never changes.
   - **Stop rule** (`Settlement`): a check-in with `day > endDay` is invalid. Once the clock passes `endDay`, the vow is finished: days 0…endDay settle exactly as they would without an end, and nothing settles after them.
-  - A finished summary has `isFinished == true`, no open day (nobody is `checkedInToday`) and `currentDay == endDay + 1` for good. Code that means "today" or "yesterday" for a finished vow must use `DayClock.currentDay` or skip it (`ActivityPage.titleDay`, `Overview.yesterdayChange`).
+  - A finished summary has `isFinished == true`, no open day (nobody is `checkedInToday`) and `currentDay == endDay + 1` for good. Code that means "today" or "yesterday" for a finished vow must use `DayClock.currentDay` or skip it (`ActivityPage.titleDay`, `Overview.yesterdayChange`, `CalendarSpan`'s forward limit).
   - A finished vow is never open (`Digest.isOpen`) and never reminded (`reminderGroups` skips it, and `ReminderGroup.endsAt` drops reminders after the final day). `AppStore.checkIn` and `setVow` return early on it.
-  - Helpers: `EndDate` (`isFinished`, `dayCounter`, `finalDate`, `endsAt`) and `StreakCalendar` (`months`, `streakStartDay`/`streakStartDate`; `CalendarDay` carries its state, `isFinal`, `isStreakStart` and `groupDay`).
+  - Helpers: `EndDate` (`isFinished`, `dayCounter`, `finalDate`, `endsAt`), `CalendarSpan` (the streak calendar's months, from group day 0's month through max(the clock's month + `StreakCalendar.monthsAhead` (12), the final day's month), capped at `StreakCalendar.maxMonths`; `count`, `home`, `month(at:)`, built lazily) and `StreakCalendar` (`streakStartDay`/`streakStartDate`). `CalendarDay` carries its state, `isFinal`, `joinsPrevious`/`joinsNext` (a kept neighbour in the same week row) and `groupDay`.
   - Older builds ignore `endDay` (see Known issues, mixed builds).
 
 **Settlement**
@@ -249,7 +252,7 @@ All of these are verified in code. If a change needs to break one, raise it with
 
 | Token | What it covers |
 |---|---|
-| `Ink` | Colour roles: `bg`, `card`, `text`/`text2`/`text3`, `flame*`, `gain`, `loss`, `scrim` (behind the sidebar), `flameTint`/`flameEdge` (kept calendar days; the edge is also the milestone tag's border), … |
+| `Ink` | Colour roles: `bg`, `card`, `text`/`text2`/`text3`, `flame*`, `gain`, `loss`, `scrim` (behind the sidebar), `flameEdge` (the milestone tag's border), `onFlame` (dark numerals on a kept calendar day), `missedDay` (a missed calendar day's grey disc), … |
 | `Fonts` | Dynamic Type styles; SF Rounded for numbers only. `tabLabel` is a fixed 10 pt, like the system tab bar |
 | `Gap` | 4-pt grid, plus `gutter`, `hit` 44, `orbSlot` 220, `tabBar` 49, `sidebarMax` 320 (the panel is 82 % of the width, at most this) |
 | `Corner` | Always `.continuous` |
@@ -275,6 +278,7 @@ All of these are verified in code. If a change needs to break one, raise it with
 - **≡ stays bare** except a flame dot while another of your vows is in its last 4 h (`Overview.menuDot`). No unread-style badges.
 - **Test controls** (Next day, Reset) live only on Home's test bar. A finished test vow keeps the bar, with Next day disabled.
 - **End dates are optional.** A group has no end unless New group's "End date" switch sets a "Last day" (tomorrow to a year out; 30 days by default). With one, Home shows "Day x of y" and the Streak calendar flags the final day. Afterwards Home shows `FinishedStage` and the sidebar says "Finished".
+- **Streak calendar:** kept days (today included) are `Ink.flameGradient` discs with dark numerals, and a run joins into one capsule per week row, capped at row and month edges. Misses are grey discs; today is a ring. ‹ › page from the month the group began to a year past the current month (or the final day's month, if later).
 - **Keep it neutral and kind:**
   - No streak freezes, nudges, leaderboards or guilt-trip copy.
   - In today's status, friends show as "Not yet", never "missed". The ledger does say "Maya missed".
@@ -427,6 +431,7 @@ All of these are verified in code unless marked otherwise. Fix them only when as
 
 - `InviteLinkSheet.copied` never resets, so a second Copy gives no haptic.
 - `OrbBurst` ignores Reduce Motion.
+- **The blank Settings sheet's root cause is unconfirmed on a device.** Round 4 removed the Settings-only suspects: the empty `SheetScaffold` footer inset (most likely), the dialog on the sheet root and the authorization `.task`. If it is still blank, the remaining suspect is the compact time picker, which is in the first frame only while the reminder is on.
 - The Tasks started by `FlameStreak.flare` are never cancelled on disappear.
 - `vowSheet` sets `presentationCornerRadius(Corner.sheet)`, which overrides iOS 26's device-matched corners on floating detented sheets. This is visual only and unverified on a device.
 
@@ -434,7 +439,8 @@ All of these are verified in code unless marked otherwise. Fix them only when as
 
 - `Motion.dimGateNanos` and `Anim.dimGateNanos`
 - `MainView.crossfade` (0.35 s) and `Anim.screen`
-- The sidebar slide: `MainView.sidebarSlide` (0.35 s) and `ProfileRow.revealDelayNanos` (the slide + 300 ms) assume that `Anim.sidebarIn`/`sidebarOut` settle within 0.35 s.
+- The sidebar slide: `MainView.sidebarSlide` (0.35 s) and `ProfileRow.revealDelayNanos` (the slide + 300 ms) assume that `Anim.sidebarIn`/`sidebarOut` settle within 0.35 s over the panel's width plus `Sidebar.shadowReach` (56 pt).
+- The tab bar's item line: `Sidebar.footerBottom` centres the profile row (`SidebarMetrics.profile`, 60) on `(bottomInset + Gap.tabBar) / 2`, where `VowTabBar` centres its items (offset by `bottomInset / 2`). Change both together.
 - `RootView.barHeight` (52, used until the shell measures the bar) = TopBar's 44 pt row + 2 × `StageMetrics.regular.barPadding`
 - The orb size: literal `220` throughout `Orb/`, and `Gap.orbSlot`
 - `vowTapPadding` in `StageCenter` and in `EmptyStage`

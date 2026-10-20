@@ -40,10 +40,12 @@ final class StreakCalendarTests: XCTestCase {
     private struct Layout {
         let summary: GroupSummary
         let standing: MemberStanding
+        let span: CalendarSpan
+        /// Every month of the span, oldest first.
         let months: [CalendarMonth]
     }
 
-    /// Settles a one-member group ("me", kept on `kept` days) and lays out its calendar.
+    /// Settles a one-member group ("me", kept on `kept` days) and lays out every month of its calendar.
     private func layout(_ group: GroupInfo, kept: [Int], joinedDay: Int = 0, firstWeekday: Int = 1,
                         now: Date? = nil) throws -> Layout {
         let me: MemberInfo = MemberInfo(userID: "me", displayName: "Ari", vow: "I will read", joinedDay: joinedDay,
@@ -55,9 +57,15 @@ final class StreakCalendarTests: XCTestCase {
         let snapshot: GroupSnapshot = GroupSnapshot(group: group, members: [me], checkIns: checkIns, fetchedAt: created)
         let summary: GroupSummary = Settlement.summarize(snapshot, viewerID: "me", now: now ?? anyNow)
         let standing: MemberStanding = try XCTUnwrap(summary.viewer)
-        let months: [CalendarMonth] = StreakCalendar.months(group: group, summary: summary, standing: standing,
-                                                            calendar: calendar(firstWeekday: firstWeekday))
-        return Layout(summary: summary, standing: standing, months: months)
+        let span: CalendarSpan = try XCTUnwrap(CalendarSpan(group: group, summary: summary, standing: standing,
+                                                            calendar: calendar(firstWeekday: firstWeekday),
+                                                            now: now ?? anyNow))
+        var months: [CalendarMonth] = []
+        for index in 0..<span.count {
+            let month: CalendarMonth = try XCTUnwrap(span.month(at: index), "month \(index)")
+            months.append(month)
+        }
+        return Layout(summary: summary, standing: standing, span: span, months: months)
     }
 
     private func countDays(_ months: [CalendarMonth], _ test: (CalendarDay) -> Bool) -> Int {
@@ -70,24 +78,64 @@ final class StreakCalendarTests: XCTestCase {
         return n
     }
 
-    // MARK: - Month span and week layout
+    private func joinsPrevious(_ days: ArraySlice<CalendarDay>) -> [Bool] {
+        return days.map { (d: CalendarDay) -> Bool in return d.joinsPrevious }
+    }
+
+    private func joinsNext(_ days: ArraySlice<CalendarDay>) -> [Bool] {
+        return days.map { (d: CalendarDay) -> Bool in return d.joinsNext }
+    }
+
+    // MARK: - Span
+
+    func testSpanRunsFromTheGroupsMonthToAYearAhead() throws {
+        // Created Mon 2025-11-10 12:00 EST; now is Fri 2025-12-05 12:00 EST (day 25).
+        let group: GroupInfo = makeGroup(isTest: false, createdAt: date(1_762_794_000))
+        let l: Layout = try layout(group, kept: [0, 1], now: date(1_764_954_000))
+        XCTAssertEqual(l.summary.currentDay, 25)
+
+        // Back to November (the group's month), not October; ahead to December 2026, not January 2027.
+        XCTAssertEqual(l.span.count, 14)
+        XCTAssertEqual(l.span.home, 1)
+        XCTAssertEqual(l.months[0].start, date(1_761_969_600))         // Sat 2025-11-01 00:00 EDT
+        XCTAssertEqual(l.months[1].start, date(1_764_565_200))         // Mon 2025-12-01 00:00 EST
+        XCTAssertEqual(l.months[13].start, date(1_796_101_200))        // Tue 2026-12-01 00:00 EST
+        XCTAssertNil(l.span.month(at: -1))
+        XCTAssertNil(l.span.month(at: 14))
+
+        // Nov 1–9 come before the group began.
+        let november: CalendarMonth = l.months[0]
+        for day in november.days.prefix(9) {
+            XCTAssertEqual(day.state, .outside, "Nov \(day.dayNumber)")
+            XCTAssertLessThan(day.groupDay, 0)
+        }
+        XCTAssertEqual(november.days[9].groupDay, 0)
+        XCTAssertEqual(november.days[9].state, .kept)
+        XCTAssertEqual(november.days[11].state, .missed)
+        XCTAssertEqual(l.months[1].days[4].state, .todayOpen)
+    }
 
     func testMonthSpanAndLeadingBlanks() throws {
         let sunday: Layout = try layout(makeGroup(testDay: 3), kept: [0, 2], firstWeekday: 1)
-        XCTAssertEqual(sunday.months.count, 2)
+        // December 2025 (the group's month) through January 2027 (today's month + 12).
+        XCTAssertEqual(sunday.span.count, 14)
+        XCTAssertEqual(sunday.span.home, 1)
         XCTAssertEqual(sunday.months[0].start, date(1_764_565_200))   // Mon 2025-12-01 00:00 EST
         XCTAssertEqual(sunday.months[1].start, date(1_767_243_600))   // Thu 2026-01-01 00:00 EST
+        XCTAssertEqual(sunday.months[13].start, date(1_798_779_600))  // Fri 2027-01-01 00:00 EST
         XCTAssertEqual(sunday.months[0].id, sunday.months[0].start)
         XCTAssertEqual(sunday.months[0].leadingBlanks, 1)
         XCTAssertEqual(sunday.months[1].leadingBlanks, 4)
+        XCTAssertEqual(sunday.months[13].leadingBlanks, 5)
         XCTAssertEqual(sunday.months[0].days.count, 31)
         XCTAssertEqual(sunday.months[1].days.count, 31)
         XCTAssertEqual(sunday.months[0].days.first?.dayNumber, 1)
         XCTAssertEqual(sunday.months[0].days.last?.dayNumber, 31)
         XCTAssertEqual(sunday.months[0].days.first?.date, sunday.months[0].start)
 
+        // No runs here (days 0 and 2 kept, 1 missed), so the joins agree whatever the first weekday.
         let monday: Layout = try layout(makeGroup(testDay: 3), kept: [0, 2], firstWeekday: 2)
-        XCTAssertEqual(monday.months.count, 2)
+        XCTAssertEqual(monday.span.count, 14)
         XCTAssertEqual(monday.months[0].leadingBlanks, 0)
         XCTAssertEqual(monday.months[1].leadingBlanks, 3)
         XCTAssertEqual(monday.months[0].days, sunday.months[0].days)
@@ -96,10 +144,71 @@ final class StreakCalendarTests: XCTestCase {
 
     func testOnlyFirstWeekdayIsReadFromTheCalendar() throws {
         let group: GroupInfo = makeGroup(testDay: 3)
-        let monday: Layout = try layout(group, kept: [0, 2], firstWeekday: 2)
-        let tokyo: [CalendarMonth] = StreakCalendar.months(group: group, summary: monday.summary, standing: monday.standing,
-                                                           calendar: calendar(firstWeekday: 2, timeZoneID: "Asia/Tokyo"))
-        XCTAssertEqual(tokyo, monday.months)
+        let monday: Layout = try layout(group, kept: [0, 1, 2], firstWeekday: 2)
+        let tokyo: CalendarSpan = try XCTUnwrap(CalendarSpan(group: group, summary: monday.summary,
+                                                             standing: monday.standing,
+                                                             calendar: calendar(firstWeekday: 2, timeZoneID: "Asia/Tokyo"),
+                                                             now: anyNow))
+        XCTAssertEqual(tokyo.count, monday.span.count)
+        XCTAssertEqual(tokyo.home, monday.span.home)
+        for index in 0..<tokyo.count {
+            XCTAssertEqual(tokyo.month(at: index), monday.months[index], "month \(index)")
+        }
+    }
+
+    func testEndMonthBeyondAYearAhead() throws {
+        // Final day 500 = Sat 2027-05-15, past January 2027 (today's month + 12): the span runs to May.
+        let l: Layout = try layout(makeGroup(testDay: 3, endDay: 500), kept: [0, 1, 2])
+        XCTAssertEqual(l.span.count, 18)
+        XCTAssertEqual(l.span.home, 1)
+        let may: CalendarMonth = l.months[17]
+        XCTAssertEqual(may.start, date(1_809_144_000))                  // 2027-05-01 00:00 EDT
+        XCTAssertTrue(may.days[14].isFinal)
+        XCTAssertEqual(may.days[14].groupDay, 500)
+        XCTAssertEqual(may.days[14].state, .upcoming)
+        for day in may.days[15...] {
+            XCTAssertEqual(day.state, .outside, "May \(day.dayNumber)")
+        }
+        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isFinal }, 1)
+    }
+
+    func testFinishedRealVowStillReachesAYearPastToday() throws {
+        // Final day 10 (Sat Jan 10); now is Fri 2026-04-10 12:00 EDT (day 100). The summary stops at day 11,
+        // the clock doesn't: the span runs to April 2027 and opens on January, the final day's month.
+        let l: Layout = try layout(makeGroup(isTest: false, endDay: 10), kept: [0, 1, 2], now: date(1_775_836_800))
+        XCTAssertTrue(l.summary.isFinished)
+        XCTAssertEqual(l.summary.currentDay, 11)
+        XCTAssertEqual(l.span.count, 17)
+        XCTAssertEqual(l.span.home, 1)
+        XCTAssertEqual(l.months[16].start, date(1_806_552_000))         // 2027-04-01 00:00 EDT
+        XCTAssertTrue(l.months[1].days[9].isFinal)
+        XCTAssertEqual(l.months[1].days[9].state, .missed)
+        for month in l.months[2...] {
+            for day in month.days {
+                XCTAssertEqual(day.state, .outside)
+            }
+        }
+        let open: Int = countDays(l.months) { (d: CalendarDay) -> Bool in
+            return d.state == .todayOpen || d.state == .todayKept || d.state == .upcoming
+        }
+        XCTAssertEqual(open, 0)
+    }
+
+    func testSpanIsCapped() throws {
+        // Day 40,000 is in July 2135, more than maxMonths after December 2025. Built by hand: settling
+        // 40,000 days would only slow the test down.
+        let group: GroupInfo = makeGroup(testDay: 40_000)
+        let me: MemberStanding = MemberStanding(userID: "me", displayName: "Ari", vow: "I will read", isActive: true,
+                                                net: 0, streak: 0, bestStreak: 0, history: [],
+                                                checkedInToday: false, missedYesterday: false)
+        let summary: GroupSummary = GroupSummary(currentDay: 40_000, cycle: 1_334, dayInCycle: 11, glyphNumber: 40_001,
+                                                 pot: 0, totalForfeited: 0, standings: [me], ledger: [], viewer: me)
+        let span: CalendarSpan = try XCTUnwrap(CalendarSpan(group: group, summary: summary, standing: me,
+                                                            calendar: calendar(firstWeekday: 1), now: anyNow))
+        XCTAssertEqual(span.count, StreakCalendar.maxMonths)
+        XCTAssertEqual(span.home, StreakCalendar.maxMonths - 1)
+        XCTAssertNotNil(span.month(at: StreakCalendar.maxMonths - 1))
+        XCTAssertNil(span.month(at: StreakCalendar.maxMonths))
     }
 
     // MARK: - States
@@ -127,10 +236,13 @@ final class StreakCalendarTests: XCTestCase {
             XCTAssertEqual(day.state, .upcoming, "Jan \(day.dayNumber)")
         }
 
-        // Streak 1, begun on Jan 2; no end, so no flag.
-        XCTAssertEqual(l.standing.streak, 1)
-        XCTAssertTrue(jan.days[1].isStreakStart)
-        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isStreakStart }, 1)
+        // No end: every day of the months ahead is to come, and there's no flag.
+        for month in l.months[2...] {
+            for day in month.days {
+                XCTAssertEqual(day.state, .upcoming)
+            }
+        }
+        XCTAssertEqual(l.months[13].days[30].groupDay, 396)          // 2027-01-31
         XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isFinal }, 0)
     }
 
@@ -138,20 +250,23 @@ final class StreakCalendarTests: XCTestCase {
         let now: Date = date(1_767_373_200)   // 2026-01-02 12:00 EST → day 2
         let l: Layout = try layout(makeGroup(isTest: false), kept: [0, 1], now: now)
         XCTAssertEqual(l.summary.currentDay, 2)
-        XCTAssertEqual(l.months.count, 2)
+        XCTAssertEqual(l.span.count, 14)
+        XCTAssertEqual(l.span.home, 1)
         XCTAssertEqual(l.months[0].days[30].state, .kept)
         XCTAssertEqual(l.months[1].days[0].state, .kept)
         XCTAssertEqual(l.months[1].days[1].state, .todayOpen)
         XCTAssertEqual(l.months[1].days[2].state, .upcoming)
-        XCTAssertTrue(l.months[0].days[30].isStreakStart)
     }
 
     func testLateJoinStartsAtYourFirstVowDay() throws {
-        // Joined on day 33 (Mon Feb 2); today is day 35 (Wed Feb 4).
+        // Joined on day 33 (Mon Feb 2); today is day 35 (Wed Feb 4). The span still starts with the
+        // group's month, but nothing before your first vow day is yours.
         let l: Layout = try layout(makeGroup(testDay: 35), kept: [33], joinedDay: 33)
         XCTAssertEqual(l.standing.history, [DayOutcome.kept, DayOutcome.missed])
-        XCTAssertEqual(l.months.count, 1)
-        let feb: CalendarMonth = l.months[0]
+        XCTAssertEqual(l.span.count, 15)
+        XCTAssertEqual(l.span.home, 2)
+        XCTAssertEqual(countDays(Array(l.months[0...1])) { (d: CalendarDay) -> Bool in return d.state != .outside }, 0)
+        let feb: CalendarMonth = l.months[2]
         XCTAssertEqual(feb.start, date(1_769_922_000))                 // Sun 2026-02-01 00:00 EST
         XCTAssertEqual(feb.leadingBlanks, 0)
         XCTAssertEqual(feb.days.count, 28)
@@ -161,6 +276,45 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertEqual(feb.days[3].state, .todayOpen)
         XCTAssertEqual(feb.days[4].state, .upcoming)
         XCTAssertEqual(feb.days[27].state, .upcoming)
+    }
+
+    // MARK: - Runs
+
+    func testRunsJoinWithinAWeekRow() throws {
+        // Today is day 9 (Fri Jan 9), kept; day 6 (Tue Jan 6) missed. Weeks from Sunday: Jan 1 is in
+        // column 4, Sat Jan 3 ends the first row and Sun Jan 4 starts the second.
+        let sunday: Layout = try layout(makeGroup(testDay: 9), kept: [0, 1, 2, 3, 4, 5, 7, 8, 9])
+        let dec31: CalendarDay = sunday.months[0].days[30]
+        XCTAssertEqual(dec31.state, .kept)
+        XCTAssertFalse(dec31.joinsPrevious)                          // Dec 30 is before the group
+        XCTAssertFalse(dec31.joinsNext)                              // Jan 1 is in the next month's grid
+        let jan: CalendarMonth = sunday.months[1]
+        XCTAssertEqual(jan.days[8].state, .todayKept)
+        XCTAssertEqual(joinsPrevious(jan.days[0..<10]), [false, true, true, false, true, false, false, true, true, false])
+        XCTAssertEqual(joinsNext(jan.days[0..<10]), [true, true, false, true, false, false, true, true, false, false])
+        XCTAssertEqual(countDays(sunday.months) { (d: CalendarDay) -> Bool in return d.joinsPrevious }, 5)
+        XCTAssertEqual(countDays(sunday.months) { (d: CalendarDay) -> Bool in return d.joinsNext }, 5)
+
+        // Weeks from Monday: Jan 1 is in column 3, Sun Jan 4 ends the first row and Mon Jan 5 starts the second.
+        let monday: Layout = try layout(makeGroup(testDay: 9), kept: [0, 1, 2, 3, 4, 5, 7, 8, 9], firstWeekday: 2)
+        let janMonday: CalendarMonth = monday.months[1]
+        XCTAssertEqual(joinsPrevious(janMonday.days[0..<10]), [false, true, true, true, false, false, false, true, true, false])
+        XCTAssertEqual(joinsNext(janMonday.days[0..<10]), [true, true, true, false, false, false, true, true, false, false])
+    }
+
+    func testTodayJoinsTheRunOnlyOnceKept() throws {
+        let open: Layout = try layout(makeGroup(testDay: 9), kept: [7, 8])
+        let jan: CalendarMonth = open.months[1]
+        XCTAssertEqual(jan.days[8].state, .todayOpen)
+        XCTAssertTrue(jan.days[7].joinsPrevious)
+        XCTAssertFalse(jan.days[7].joinsNext)
+        XCTAssertFalse(jan.days[8].joinsPrevious)
+        XCTAssertFalse(jan.days[8].joinsNext)
+
+        let kept: Layout = try layout(makeGroup(testDay: 9), kept: [7, 8, 9])
+        XCTAssertTrue(kept.months[1].days[7].joinsNext)
+        XCTAssertTrue(kept.months[1].days[8].joinsPrevious)
+        XCTAssertFalse(kept.months[1].days[8].joinsNext)              // Jan 10 is to come
     }
 
     // MARK: - Streak start
@@ -174,7 +328,6 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertEqual(StreakCalendar.streakStartDay(summary: today.summary, standing: today.standing), 0)
         XCTAssertEqual(StreakCalendar.streakStartDate(group: group, summary: today.summary, standing: today.standing),
                        date(1_767_157_200))
-        XCTAssertTrue(today.months[0].days[30].isStreakStart)
         XCTAssertEqual(today.months[1].days[2].state, .todayKept)
 
         // Not yet today: the streak still counts through yesterday.
@@ -186,14 +339,12 @@ final class StreakCalendarTests: XCTestCase {
         // Kept only today: the streak starts today.
         let onlyToday: Layout = try layout(group, kept: [3])
         XCTAssertEqual(StreakCalendar.streakStartDay(summary: onlyToday.summary, standing: onlyToday.standing), 3)
-        XCTAssertTrue(onlyToday.months[1].days[2].isStreakStart)
 
         // No streak.
         let none: Layout = try layout(group, kept: [0])
         XCTAssertEqual(none.standing.streak, 0)
         XCTAssertNil(StreakCalendar.streakStartDay(summary: none.summary, standing: none.standing))
         XCTAssertNil(StreakCalendar.streakStartDate(group: group, summary: none.summary, standing: none.standing))
-        XCTAssertEqual(countDays(none.months) { (d: CalendarDay) -> Bool in return d.isStreakStart }, 0)
     }
 
     // MARK: - End date
@@ -202,7 +353,7 @@ final class StreakCalendarTests: XCTestCase {
         // Final day 40 = Mon Feb 9; today is day 3 (Jan 3).
         let group: GroupInfo = makeGroup(testDay: 3, endDay: 40)
         let l: Layout = try layout(group, kept: [0, 2])
-        XCTAssertEqual(l.months.count, 3)
+        XCTAssertEqual(l.span.count, 14)
         let jan: CalendarMonth = l.months[1]
         let feb: CalendarMonth = l.months[2]
         XCTAssertEqual(feb.start, date(1_769_922_000))
@@ -217,6 +368,12 @@ final class StreakCalendarTests: XCTestCase {
         for day in feb.days[9...] {
             XCTAssertEqual(day.state, .outside, "Feb \(day.dayNumber)")
         }
+        // The months ahead are after the final day.
+        for month in l.months[3...] {
+            for day in month.days {
+                XCTAssertEqual(day.state, .outside)
+            }
+        }
         XCTAssertTrue(feb.days[8].isFinal)
         XCTAssertEqual(feb.days[8].date, date(1_770_613_200))         // 2026-02-09 00:00 EST
         XCTAssertEqual(EndDate.finalDate(group), feb.days[8].date)
@@ -229,7 +386,7 @@ final class StreakCalendarTests: XCTestCase {
     func testFinalDayInsideTheCurrentMonth() throws {
         // Final day 5 = Jan 5; today is day 3.
         let l: Layout = try layout(makeGroup(testDay: 3, endDay: 5), kept: [0, 1, 2])
-        XCTAssertEqual(l.months.count, 2)
+        XCTAssertEqual(l.span.count, 14)
         let jan: CalendarMonth = l.months[1]
         XCTAssertEqual(jan.days[2].state, .todayOpen)
         XCTAssertEqual(jan.days[3].state, .upcoming)
@@ -245,13 +402,17 @@ final class StreakCalendarTests: XCTestCase {
         // Final day 2 (Jan 2); the clock is at day 5. Check-ins on days 3 and 4 don't count.
         let l: Layout = try layout(makeGroup(testDay: 5, endDay: 2), kept: [0, 1, 2, 3, 4])
         XCTAssertTrue(l.summary.isFinished)
-        XCTAssertEqual(l.months.count, 2)
+        XCTAssertEqual(l.span.count, 14)
+        XCTAssertEqual(l.span.home, 1)
         let dec: CalendarMonth = l.months[0]
         let jan: CalendarMonth = l.months[1]
         XCTAssertEqual(dec.days[30].state, .kept)
         XCTAssertEqual(jan.days[0].state, .kept)
         XCTAssertEqual(jan.days[1].state, .kept)
         XCTAssertTrue(jan.days[1].isFinal)
+        XCTAssertTrue(jan.days[0].joinsNext)
+        XCTAssertTrue(jan.days[1].joinsPrevious)
+        XCTAssertFalse(jan.days[1].joinsNext)
         for day in jan.days[2...] {
             XCTAssertEqual(day.state, .outside, "Jan \(day.dayNumber)")
         }
@@ -261,20 +422,22 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertEqual(open, 0)
         XCTAssertEqual(l.standing.streak, 3)
         XCTAssertEqual(StreakCalendar.streakStartDay(summary: l.summary, standing: l.standing), 0)
-        XCTAssertTrue(dec.days[30].isStreakStart)
     }
 
-    func testFinishedVowEndsWithTheFinalDaysMonth() throws {
-        // Final day 31 = Sat Jan 31; the clock is in February, but February is not shown.
+    func testFinishedVowOpensOnTheFinalDaysMonth() throws {
+        // Final day 31 = Sat Jan 31; the clock is at day 40 (Feb 9). January opens; February is all outside.
         let l: Layout = try layout(makeGroup(testDay: 40, endDay: 31), kept: [30, 31])
         XCTAssertTrue(l.summary.isFinished)
-        XCTAssertEqual(l.months.count, 2)
+        XCTAssertEqual(l.span.count, 15)
+        XCTAssertEqual(l.span.home, 1)
         let jan: CalendarMonth = l.months[1]
+        XCTAssertEqual(jan.days[28].state, .missed)
         XCTAssertEqual(jan.days[29].state, .kept)
         XCTAssertEqual(jan.days[30].state, .kept)
         XCTAssertTrue(jan.days[30].isFinal)
-        XCTAssertTrue(jan.days[29].isStreakStart)
-        XCTAssertEqual(jan.days[28].state, .missed)
+        XCTAssertTrue(jan.days[29].joinsNext)
+        XCTAssertTrue(jan.days[30].joinsPrevious)
+        XCTAssertEqual(countDays([l.months[2]]) { (d: CalendarDay) -> Bool in return d.state != .outside }, 0)
     }
 
     // MARK: - DST
@@ -283,7 +446,8 @@ final class StreakCalendarTests: XCTestCase {
         // Created Sun 2026-03-01 12:00 EST; clocks spring forward on Mar 8. Today is day 10 (Mar 11).
         let spring: GroupInfo = makeGroup(testDay: 10, createdAt: date(1_772_384_400))
         let l: Layout = try layout(spring, kept: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        XCTAssertEqual(l.months.count, 1)
+        XCTAssertEqual(l.span.count, 13)
+        XCTAssertEqual(l.span.home, 0)
         let march: CalendarMonth = l.months[0]
         XCTAssertEqual(march.start, date(1_772_341_200))               // 2026-03-01 00:00 EST
         XCTAssertEqual(march.leadingBlanks, 0)
@@ -300,12 +464,12 @@ final class StreakCalendarTests: XCTestCase {
         }
         XCTAssertEqual(march.days[10].state, .todayOpen)
         XCTAssertEqual(march.days[30].state, .upcoming)
-        XCTAssertTrue(march.days[0].isStreakStart)
 
         // Created Sat 2026-10-31 12:00 EDT; clocks fall back on Nov 1. Today is day 2 (Nov 2).
         let fall: GroupInfo = makeGroup(testDay: 2, createdAt: date(1_793_462_400))
         let f: Layout = try layout(fall, kept: [0, 1])
-        XCTAssertEqual(f.months.count, 2)
+        XCTAssertEqual(f.span.count, 14)
+        XCTAssertEqual(f.span.home, 1)
         XCTAssertEqual(f.months[0].leadingBlanks, 4)                   // Thu Oct 1, weeks from Sunday
         XCTAssertEqual(f.months[0].days[30].state, .kept)              // Oct 31
         let november: CalendarMonth = f.months[1]

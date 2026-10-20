@@ -37,8 +37,12 @@ enum Ink {
     static let loss: Color = Color(hex: 0xFF7066)
     /// Behind the sidebar.
     static let scrim: Color = Color.black.opacity(0.45)
-    /// Edge of a kept day (as the milestone tag's border).
+    /// The milestone tag's border.
     static let flameEdge: Color = Color(hex: 0xFFAA3C).opacity(0.35)
+    /// Dark ink on a flame fill: a kept day's date in the streak calendar.
+    static let onFlame: Color = Color(hex: 0x1C0F06)
+    /// A missed day in the streak calendar: a quiet grey disc, never red.
+    static let missedDay: Color = Color(hex: 0x2B2F3C)
 
     /// Flame icon fill, top to bottom.
     static var flameGradient: LinearGradient {
@@ -48,12 +52,6 @@ enum Ink {
     /// Next-milestone bar fill, leading to trailing.
     static var milestoneGradient: LinearGradient {
         LinearGradient(colors: [Ink.flameMid, Ink.flameGold], startPoint: .leading, endPoint: .trailing)
-    }
-
-    /// Kept days in the streak calendar: the milestone tag's flame tint (one accent, the streak's colour).
-    static var flameTint: LinearGradient {
-        LinearGradient(colors: [Ink.flameMid.opacity(0.30), Ink.flameGold.opacity(0.20)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     /// Colour for the VIEWER's own points: > 0 gain, < 0 loss, 0 (after 2-decimal rounding) text2.

@@ -15,6 +15,8 @@ struct SettingsSheet: View {
 
     init() {}
 
+    /// Already current when the sheet opens: VowApp has ReminderCenter read the system setting at launch and
+    /// whenever the app becomes active, coming back from iOS Settings included.
     private var denied: Bool {
         reminders.authorization == .denied
     }
@@ -55,19 +57,6 @@ struct SettingsSheet: View {
     var body: some View {
         SheetScaffold(title: "Settings", onClose: { dismiss() }) {
             column
-        } footer: {
-            EmptyView()
-        }
-        .task {
-            await reminders.refreshAuthorization()
-        }
-        .confirmationDialog("Reset local data?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Reset", role: .destructive) {
-                resetLocalData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Clears your name, cached groups and settings on this iPhone. Your groups in iCloud stay.")
         }
     }
 
@@ -151,6 +140,7 @@ struct SettingsSheet: View {
         }
     }
 
+    /// The confirmation hangs off the row that asks for it, which iOS 26 anchors it to.
     private var resetRow: some View {
         Button {
             confirmReset = true
@@ -163,6 +153,14 @@ struct SettingsSheet: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(RowPressStyle())
+        .confirmationDialog("Reset local data?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Reset", role: .destructive) {
+                resetLocalData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clears your name, cached groups and settings on this iPhone. Your groups in iCloud stay.")
+        }
     }
 
     // MARK: - About
