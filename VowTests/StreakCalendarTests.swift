@@ -9,6 +9,7 @@ final class StreakCalendarTests: XCTestCase {
     /// day 31 Sat Jan 31, day 32 Sun Feb 1, day 40 Mon Feb 9.
     private let created: Date = Date(timeIntervalSince1970: 1_767_225_600)
     private let ny: String = "America/New_York"
+    /// 2027-01-15T08:00:00Z (03:00 in New York): any moment for test groups, which ignore the clock.
     private let anyNow: Date = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func date(_ seconds: Double) -> Date {
@@ -126,8 +127,8 @@ final class StreakCalendarTests: XCTestCase {
         // Streak 1, begun on Jan 2; no end, so no flag.
         XCTAssertEqual(l.standing.streak, 1)
         XCTAssertTrue(jan.days[1].isStreakStart)
-        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in d.isStreakStart }, 1)
-        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in d.isFinal }, 0)
+        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isStreakStart }, 1)
+        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isFinal }, 0)
     }
 
     func testRealGroupFollowsTheClock() throws {
@@ -189,7 +190,7 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertEqual(none.standing.streak, 0)
         XCTAssertNil(StreakCalendar.streakStartDay(summary: none.summary, standing: none.standing))
         XCTAssertNil(StreakCalendar.streakStartDate(group: group, summary: none.summary, standing: none.standing))
-        XCTAssertEqual(countDays(none.months) { (d: CalendarDay) -> Bool in d.isStreakStart }, 0)
+        XCTAssertEqual(countDays(none.months) { (d: CalendarDay) -> Bool in return d.isStreakStart }, 0)
     }
 
     // MARK: - End date
@@ -216,7 +217,7 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertTrue(feb.days[8].isFinal)
         XCTAssertEqual(feb.days[8].date, date(1_770_613_200))         // 2026-02-09 00:00 EST
         XCTAssertEqual(EndDate.finalDate(group), feb.days[8].date)
-        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in d.isFinal }, 1)
+        XCTAssertEqual(countDays(l.months) { (d: CalendarDay) -> Bool in return d.isFinal }, 1)
 
         let monday: Layout = try layout(group, kept: [0, 2], firstWeekday: 2)
         XCTAssertEqual(monday.months[2].leadingBlanks, 6)
@@ -290,7 +291,7 @@ final class StreakCalendarTests: XCTestCase {
         }
         XCTAssertEqual(march.days[7].date, date(1_772_946_000))        // Mar 8 00:00 EST
         XCTAssertEqual(march.days[8].date, date(1_773_028_800))        // Mar 9 00:00 EDT
-        XCTAssertEqual(march.days[8].date.timeIntervalSince(march.days[7].date), 82_800, accuracy: 0.001)
+        XCTAssertEqual(march.days[8].date.timeIntervalSince(march.days[7].date), 82_800, accuracy: 1e-9)
         for i in 0..<10 {
             XCTAssertEqual(march.days[i].state, .kept, "Mar \(i + 1)")
         }
@@ -307,7 +308,7 @@ final class StreakCalendarTests: XCTestCase {
         let november: CalendarMonth = f.months[1]
         XCTAssertEqual(november.start, date(1_793_505_600))            // Nov 1 00:00 EDT
         XCTAssertEqual(november.days[1].date, date(1_793_595_600))     // Nov 2 00:00 EST
-        XCTAssertEqual(november.days[1].date.timeIntervalSince(november.days[0].date), 90_000, accuracy: 0.001)
+        XCTAssertEqual(november.days[1].date.timeIntervalSince(november.days[0].date), 90_000, accuracy: 1e-9)
         XCTAssertEqual(november.days[0].state, .kept)
         XCTAssertEqual(november.days[1].state, .todayOpen)
         XCTAssertEqual(november.days.count, 30)

@@ -16,7 +16,7 @@ enum EndDate {
     /// "Day x of y" numbers while an end date is set and the vow is not finished; nil otherwise.
     /// (currentDay + 1, endDay + 1).
     static func dayCounter(_ summary: GroupSummary) -> (day: Int, total: Int)? {
-        guard let end: Int = summary.endDay, !summary.isFinished, end < Int.max else { return nil }
+        guard let end: Int = summary.endDay, !summary.isFinished else { return nil }
         return (day: summary.currentDay + 1, total: end + 1)
     }
 
@@ -24,5 +24,11 @@ enum EndDate {
     static func finalDate(_ group: GroupInfo) -> Date? {
         guard let end: Int = group.endDay else { return nil }
         return DayClock.start(ofDay: end, group: group)
+    }
+
+    /// The moment the final day ends: the start of the day after it (nil without an end).
+    static func endsAt(_ group: GroupInfo) -> Date? {
+        guard let end: Int = group.endDay else { return nil }
+        return DayClock.start(ofDay: end + 1, group: group)
     }
 }

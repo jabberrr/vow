@@ -7,6 +7,8 @@ struct ReminderGroup: Equatable {
     let keptToday: Bool
     /// MemberStanding.streak (today's check-in included once kept).
     let streak: Int
+    /// When the vow's final day ends (`EndDate.endsAt`); nil = it never ends. No reminder fires after it.
+    var endsAt: Date? = nil
 }
 
 /// A silent request at the start of a day that only sets the app badge to 0.
@@ -65,7 +67,7 @@ enum ReminderPlan {
                 continue
             }
             var open: [ReminderGroup] = []
-            for g in groups where offset > 0 || !g.keptToday {
+            for g in groups where (offset > 0 || !g.keptToday) && fire < (g.endsAt ?? Date.distantFuture) {
                 open.append(g)
             }
             if open.isEmpty {

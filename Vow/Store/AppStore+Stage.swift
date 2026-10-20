@@ -49,7 +49,8 @@ extension AppStore {
             guard let snapshot: GroupSnapshot = snapshots[id], !snapshot.group.isTest,
                   let summary: GroupSummary = all[id], !summary.isFinished,
                   let viewer: MemberStanding = summary.viewer, !viewer.vow.isEmpty else { continue }
-            out.append(ReminderGroup(id: id, name: snapshot.group.name, keptToday: viewer.checkedInToday, streak: viewer.streak))
+            out.append(ReminderGroup(id: id, name: snapshot.group.name, keptToday: viewer.checkedInToday, streak: viewer.streak,
+                                     endsAt: EndDate.endsAt(snapshot.group)))
         }
         return out
     }

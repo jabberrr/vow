@@ -101,11 +101,10 @@ enum Records {
         record["testDay"] = number(group.testDay)
         record["epoch"] = number(group.epoch)
         record["ownerUserID"] = group.ownerUserID as CKRecordValue
+        // endDay never changes after creation, so a GroupInfo without it (e.g. an older cache) must not
+        // erase it; groups without an end never touch the field.
         if let end: Int = group.endDay {
             record["endDay"] = number(end)
-        } else if int(record, "endDay") != nil {
-            // Only clear a value that is there: never touch the field on groups that have no end.
-            record.setObject(nil, forKey: "endDay")
         }
     }
 

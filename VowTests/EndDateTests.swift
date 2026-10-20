@@ -9,6 +9,7 @@ final class EndDateTests: XCTestCase {
     /// 2026-01-01T00:00:00Z = 2025-12-31 19:00 in New York, so day 0 is Dec 31 local, day 1 Jan 1, day 2 Jan 2.
     private let created: Date = Date(timeIntervalSince1970: 1_767_225_600)
     private let ny: String = "America/New_York"
+    /// 2027-01-15T08:00:00Z (03:00 in New York): any moment for test groups, which ignore the clock.
     private let anyNow: Date = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func makeGroup(isTest: Bool = true, testDay: Int = 0, stake: Int = 2, endDay: Int? = nil) -> GroupInfo {
@@ -238,6 +239,9 @@ final class EndDateTests: XCTestCase {
         // Final day 2 = 2026-01-02 00:00 EST.
         XCTAssertEqual(EndDate.finalDate(makeGroup(isTest: false, endDay: 2)), Date(timeIntervalSince1970: 1_767_330_000))
         XCTAssertNil(EndDate.finalDate(makeGroup(isTest: false)))
+        // It ends at 2026-01-03 00:00 EST, the start of day 3.
+        XCTAssertEqual(EndDate.endsAt(makeGroup(isTest: false, endDay: 2)), Date(timeIntervalSince1970: 1_767_416_400))
+        XCTAssertNil(EndDate.endsAt(makeGroup(isTest: false)))
 
         // Across spring forward: created 2026-03-07 12:00 EST, final day 2 = 2026-03-09 00:00 EDT.
         var dst: GroupInfo = makeGroup(isTest: false, endDay: 2)
@@ -292,10 +296,10 @@ final class EndDateTests: XCTestCase {
         XCTAssertEqual(Records.int(record, "endDay"), 12)
         XCTAssertEqual(Records.groupInfo(from: record, id: id).endDay, 12)
 
-        // Clearing removes the value.
+        // A GroupInfo without an end (a stale cache) never erases a stored one.
         Records.apply(makeGroup(), to: record)
-        XCTAssertNil(Records.int(record, "endDay"))
-        XCTAssertNil(Records.groupInfo(from: record, id: id).endDay)
+        XCTAssertEqual(Records.int(record, "endDay"), 12)
+        XCTAssertEqual(Records.groupInfo(from: record, id: id).endDay, 12)
 
         // A group without an end never touches the field.
         let fresh: CKRecord = CKRecord(recordType: Records.groupType, recordID: Records.groupRecordID(id))

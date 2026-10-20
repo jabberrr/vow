@@ -47,6 +47,22 @@ final class ReminderPlanTests: XCTestCase {
         XCTAssertEqual(reqs[0].id, "vow.reminder.2026-10-14")
     }
 
+    func testNoRemindersAfterTheVowEnds() {
+        var g: ReminderGroup = group("z1", "Morning Run", kept: false, streak: 2)
+        g.endsAt = date(2026, 10, 16, 0, 0)
+        let reqs: [ReminderRequest] = ReminderPlan.requests(groups: [g], minuteOfDay: 1200, now: date(2026, 10, 13, 10, 0), calendar: calendar)
+        XCTAssertEqual(reqs.count, 3)
+        XCTAssertEqual(reqs.last?.id, "vow.reminder.2026-10-15")
+
+        // Another open vow keeps the later days, without the ended one.
+        let other: ReminderGroup = group("z2", "Read", kept: false, streak: 0)
+        let both: [ReminderRequest] = ReminderPlan.requests(groups: [g, other], minuteOfDay: 1200, now: date(2026, 10, 13, 10, 0),
+                                                            calendar: calendar)
+        XCTAssertEqual(both.count, 7)
+        XCTAssertEqual(both[3].title, "Read")
+        XCTAssertEqual(both[3].groupID, other.id)
+    }
+
     func testPastTimeSkipsToday() {
         let g: ReminderGroup = group("z1", "Morning Run", kept: false, streak: 1)
         let reqs: [ReminderRequest] = ReminderPlan.requests(groups: [g], minuteOfDay: 1200, now: date(2026, 10, 13, 21, 0), calendar: calendar)
