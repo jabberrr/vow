@@ -1,7 +1,9 @@
 import Foundation
 
+/// How a closed day went for a member. `.excused` sits out: no stake lost, no share of the pot, and it
+/// neither breaks nor extends a streak.
 enum DayOutcome: String, Codable {
-    case kept, missed
+    case kept, missed, excused
 }
 
 enum MemberStatus: String {
@@ -24,13 +26,20 @@ struct MemberStanding: Identifiable, Equatable {
     let isActive: Bool
     /// Points won − forfeited in this group (current epoch only).
     let net: Double
-    /// Consecutive kept closed days ending yesterday, +1 if checked in today.
+    /// Kept closed days back to the last miss (excused days in between don't count or break it), +1
+    /// once checked in today unless that check-in is overruled.
     let streak: Int
     let bestStreak: Int
     /// Closed days since joining (current epoch), oldest first.
     let history: [DayOutcome]
+    /// A valid check-in exists for today, overruled or not: the orb stays sealed either way.
     let checkedInToday: Bool
+    /// Yesterday's outcome was a miss (an overruled check-in or excuse included).
     let missedYesterday: Bool
+    /// A valid excuse today and no check-in: today's orb is closed for good.
+    var excusedToday: Bool = false
+    /// Today's claim (the check-in, else the excuse) is overruled by the votes so far.
+    var todayOverruled: Bool = false
 
     var id: String { userID }
 
@@ -51,14 +60,14 @@ struct MemberStanding: Identifiable, Equatable {
 
 struct LedgerLine: Identifiable, Equatable {
     enum Kind: String {
-        case kept, missed, forfeit, payout, split, carry, joined, info
+        case kept, missed, forfeit, payout, split, carry, joined, info, excused
     }
 
     /// Stable, e.g. "d12-forfeit-<userID>".
     let id: String
     let day: Int
     let kind: Kind
-    /// e.g. "Day 13 · Maya missed · −2 pts".
+    /// e.g. "Day 13 · Maya missed · −2 pts", "Day 13 · Maya's check-in was overruled · −2 pts".
     let text: String
     /// Signed, from the viewer's perspective; only on the viewer's own lines.
     let amount: Double?

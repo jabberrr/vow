@@ -45,16 +45,31 @@ final class StreakCalendarTests: XCTestCase {
         let months: [CalendarMonth]
     }
 
-    /// Settles a one-member group ("me", kept on `kept` days) and lays out every month of its calendar.
-    private func layout(_ group: GroupInfo, kept: [Int], joinedDay: Int = 0, firstWeekday: Int = 1,
-                        now: Date? = nil) throws -> Layout {
-        let me: MemberInfo = MemberInfo(userID: "me", displayName: "Ari", vow: "I will read", joinedDay: joinedDay,
-                                        joinedEpoch: 0, leftDay: nil)
+    /// Settles a group of "me" (kept on `kept` days, excused on `excused` days) and lays out every month of
+    /// its calendar. With `overruled` days, Maya joins too and votes down your claims on them.
+    private func layout(_ group: GroupInfo, kept: [Int], excused: [Int] = [], overruled: [Int] = [],
+                        joinedDay: Int = 0, firstWeekday: Int = 1, now: Date? = nil) throws -> Layout {
+        var members: [MemberInfo] = [MemberInfo(userID: "me", displayName: "Ari", vow: "I will read",
+                                                joinedDay: joinedDay, joinedEpoch: 0, leftDay: nil)]
         var checkIns: [CheckInInfo] = []
         for day in kept {
             checkIns.append(CheckInInfo(userID: "me", day: day, epoch: 0, serverDate: nil))
         }
-        let snapshot: GroupSnapshot = GroupSnapshot(group: group, members: [me], checkIns: checkIns, fetchedAt: created)
+        var excuses: [ExcuseInfo] = []
+        for day in excused {
+            excuses.append(ExcuseInfo(userID: "me", day: day, epoch: 0, text: "Sick", serverDate: nil))
+        }
+        var votes: [VoteInfo] = []
+        if !overruled.isEmpty {
+            members.append(MemberInfo(userID: "maya", displayName: "Maya", vow: "I will run", joinedDay: 0,
+                                      joinedEpoch: 0, leftDay: nil))
+        }
+        for day in overruled {
+            votes.append(VoteInfo(voterID: "maya", subjectID: "me", day: day, epoch: 0, counts: false, castDay: day,
+                                  serverDate: nil))
+        }
+        let snapshot: GroupSnapshot = GroupSnapshot(group: group, members: members, checkIns: checkIns, fetchedAt: created,
+                                                    excuses: excuses, votes: votes)
         let summary: GroupSummary = Settlement.summarize(snapshot, viewerID: "me", now: now ?? anyNow)
         let standing: MemberStanding = try XCTUnwrap(summary.viewer)
         let span: CalendarSpan = try XCTUnwrap(CalendarSpan(group: group, summary: summary, standing: standing,
@@ -315,6 +330,73 @@ final class StreakCalendarTests: XCTestCase {
         XCTAssertTrue(kept.months[1].days[7].joinsNext)
         XCTAssertTrue(kept.months[1].days[8].joinsPrevious)
         XCTAssertFalse(kept.months[1].days[8].joinsNext)              // Jan 10 is to come
+    }
+
+    // MARK: - Excuses and votes
+
+    func testExcusedDaysBreakTheBandButNotTheStreak() throws {
+        // Today is day 9 (Fri Jan 9), kept; day 7 (Wed Jan 7) excused. Jan 4...10 share a week row.
+        let l: Layout = try layout(makeGroup(testDay: 9), kept: [5, 6, 8, 9], excused: [7])
+        let jan: CalendarMonth = l.months[1]
+        XCTAssertEqual(jan.days[4].state, .kept)
+        XCTAssertEqual(jan.days[5].state, .kept)
+        XCTAssertEqual(jan.days[6].state, .excused)
+        XCTAssertEqual(jan.days[7].state, .kept)
+        XCTAssertEqual(jan.days[8].state, .todayKept)
+        XCTAssertFalse(CalendarDayState.excused.isKept)
+        XCTAssertEqual(joinsPrevious(jan.days[4..<9]), [false, true, false, false, true])
+        XCTAssertEqual(joinsNext(jan.days[4..<9]), [true, false, false, true, false])
+
+        // The streak runs through the excused day: Jan 5, 6, 8 and today.
+        XCTAssertEqual(l.standing.streak, 4)
+        XCTAssertEqual(StreakCalendar.streakStartDay(summary: l.summary, standing: l.standing), 5)
+
+        // Excused right up to today, which is still open: the streak began on day 5 all the same.
+        let open: Layout = try layout(makeGroup(testDay: 9), kept: [5, 6], excused: [7, 8])
+        XCTAssertEqual(open.months[1].days[8].state, .todayOpen)
+        XCTAssertEqual(open.standing.streak, 2)
+        XCTAssertEqual(StreakCalendar.streakStartDay(summary: open.summary, standing: open.standing), 5)
+    }
+
+    func testTodayExcusedAndOverruled() throws {
+        let group: GroupInfo = makeGroup(testDay: 3)
+
+        let excused: Layout = try layout(group, kept: [0, 1, 2], excused: [3])
+        XCTAssertEqual(excused.months[1].days[2].state, .todayExcused)
+        XCTAssertFalse(excused.months[1].days[1].joinsNext)
+        XCTAssertEqual(excused.standing.streak, 3)
+
+        // Your check-in today is overruled: it doesn't join the run or count toward the streak.
+        let overruled: Layout = try layout(group, kept: [0, 1, 2, 3], overruled: [3])
+        XCTAssertEqual(overruled.months[1].days[2].state, .todayOverruled)
+        XCTAssertFalse(overruled.months[1].days[1].joinsNext)
+        XCTAssertEqual(overruled.standing.streak, 3)
+        XCTAssertEqual(StreakCalendar.streakStartDay(summary: overruled.summary, standing: overruled.standing), 0)
+
+        let excuseOverruled: Layout = try layout(group, kept: [0, 1, 2], excused: [3], overruled: [3])
+        XCTAssertEqual(excuseOverruled.months[1].days[2].state, .todayOverruled)
+    }
+
+    func testOverruledDaysAreMissed() throws {
+        // Day 1 (Jan 1) checked in and day 2 (Jan 2) excused, both overruled.
+        let l: Layout = try layout(makeGroup(testDay: 3), kept: [0, 1], excused: [2], overruled: [1, 2])
+        XCTAssertEqual(l.months[0].days[30].state, .kept)
+        XCTAssertEqual(l.months[1].days[0].state, .missed)
+        XCTAssertEqual(l.months[1].days[1].state, .missed)
+        XCTAssertEqual(l.months[1].days[2].state, .todayOpen)
+        XCTAssertEqual(l.standing.streak, 0)
+        XCTAssertNil(StreakCalendar.streakStartDay(summary: l.summary, standing: l.standing))
+    }
+
+    func testWhichStatesAreToday() {
+        let today: [CalendarDayState] = [.todayOpen, .todayKept, .todayExcused, .todayOverruled]
+        let other: [CalendarDayState] = [.kept, .missed, .excused, .upcoming, .outside]
+        for state in today {
+            XCTAssertTrue(state.isToday, "\(state)")
+        }
+        for state in other {
+            XCTAssertFalse(state.isToday, "\(state)")
+        }
     }
 
     // MARK: - Streak start

@@ -159,7 +159,8 @@ struct SettingsSheet: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Clears your name, cached groups and settings on this iPhone. Your groups in iCloud stay.")
+            Text("Clears your name, settings, cached groups and downloaded photos and videos on this iPhone."
+                 + " Your groups in iCloud stay.")
         }
     }
 

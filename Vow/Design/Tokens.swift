@@ -122,6 +122,8 @@ enum Corner {
     static let banner: CGFloat = 18
     static let field: CGFloat = 14
     static let sheet: CGFloat = 28
+    /// Chat bubbles and the composer's field.
+    static let bubble: CGFloat = 18
 }
 
 /// Curves and beat timings. `dimGateNanos` must equal the OrbBridge copy (OrbView reads that one).
@@ -179,13 +181,15 @@ struct StageMetrics: Equatable {
     let stripRowTop: CGFloat
     let stripCell: CGFloat
     let testBarHeight: CGFloat
+    /// Gap between the member strip and Home's foot line ("Can't today?", Add proof).
+    let footTop: CGFloat
 
     static let regular: StageMetrics = StageMetrics(compact: false, barPadding: 4, vowTop: 14, orbTop: 18,
                                                     streakTop: 8, captionTop: 8, tagGap: 44, tagOffset: 6,
-                                                    stripRowTop: 12, stripCell: 56, testBarHeight: 56)
+                                                    stripRowTop: 12, stripCell: 56, testBarHeight: 56, footTop: 12)
     static let compactPreset: StageMetrics = StageMetrics(compact: true, barPadding: 2, vowTop: 8, orbTop: 8,
                                                           streakTop: 2, captionTop: 6, tagGap: 44, tagOffset: 6,
-                                                          stripRowTop: 8, stripCell: 52, testBarHeight: 48)
+                                                          stripRowTop: 8, stripCell: 52, testBarHeight: 48, footTop: 4)
 
     /// `height` = the window's safe-area height (the shell's GeometryReader).
     static func forHeight(_ height: CGFloat) -> StageMetrics {

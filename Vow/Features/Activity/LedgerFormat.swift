@@ -11,7 +11,8 @@ struct ActivityDay: Identifiable {
 }
 
 /// View-layer formatting of the Domain ledger. Domain text is never edited (SettlementTests pin it);
-/// it is parsed here: "Day 13 · Maya missed · −2 pts" -> "Maya missed" with "−2 pts" in the right column.
+/// it is parsed here: "Day 13 · Maya missed · −2 pts" -> "Maya missed" with "−2 pts" in the right column,
+/// "Day 13 · Your check-in was overruled · −2 pts" -> "Your check-in was overruled" with your −2 pts.
 enum LedgerFormat {
     /// Every day in the ledger, newest day first, lines ranked within each day. `currentDay` only names
     /// the days ("Today", "Yesterday").
@@ -33,13 +34,15 @@ enum LedgerFormat {
         return result
     }
 
-    /// Relevance: .kept/.missed 0, .payout 1, .split/.carry 2, .forfeit 3, .joined/.info 4.
-    static func rank(_ kind: LedgerLine.Kind) -> Int {
-        switch kind {
+    /// Relevance: your day (.kept, .missed, your .excused) 0, .payout 1, .split/.carry 2, everyone else's
+    /// day (.forfeit, their .excused) 3, .joined/.info 4.
+    static func rank(_ line: LedgerLine) -> Int {
+        switch line.kind {
         case .kept, .missed: return 0
         case .payout: return 1
         case .split, .carry: return 2
         case .forfeit: return 3
+        case .excused: return stripped(line.text) == "You were excused" ? 0 : 3
         case .joined, .info: return 4
         }
     }
@@ -49,8 +52,8 @@ enum LedgerFormat {
     static func ranked(_ lines: [LedgerLine]) -> [LedgerLine] {
         let indexed: [(offset: Int, element: LedgerLine)] = Array(lines.enumerated())
         let sorted: [(offset: Int, element: LedgerLine)] = indexed.sorted { (a: (offset: Int, element: LedgerLine), b: (offset: Int, element: LedgerLine)) -> Bool in
-            let ra: Int = rank(a.element.kind)
-            let rb: Int = rank(b.element.kind)
+            let ra: Int = rank(a.element)
+            let rb: Int = rank(b.element)
             if ra != rb {
                 return ra < rb
             }
@@ -62,17 +65,16 @@ enum LedgerFormat {
     static func body(_ line: LedgerLine) -> String {
         switch line.kind {
         case .kept: return "You kept"
-        case .missed: return "You missed"
         case .payout: return "Your share"
-        case .forfeit, .split, .carry: return splitLast(stripped(line.text)).head
-        case .joined, .info: return stripped(line.text)
+        case .missed, .forfeit, .split, .carry: return splitLast(stripped(line.text)).head
+        case .joined, .info, .excused: return stripped(line.text)
         }
     }
 
     /// Right-hand column text, or nil.
     static func trailing(_ line: LedgerLine) -> String? {
         switch line.kind {
-        case .kept, .joined, .info:
+        case .kept, .joined, .info, .excused:
             return nil
         case .missed, .payout:
             guard let amount: Double = line.amount else { return nil }
@@ -107,20 +109,23 @@ enum LedgerFormat {
         case .carry: return "arrow.uturn.forward.circle"
         case .joined: return "person.crop.circle.badge.plus"
         case .info: return "person.crop.circle.badge.minus"
+        case .excused: return "pause.circle"
         }
     }
 
-    /// Symbol colour: your day in text/loss/gain, the pot carrying over in gain, the rest quiet.
+    /// Symbol colour: your day in text/loss/gain, the pot carrying over in gain, the rest quiet. A day sat
+    /// out moves neither points nor the streak, so it stays quiet too.
     static func tint(_ kind: LedgerLine.Kind) -> Color {
         switch kind {
         case .kept: return Ink.text
         case .missed: return Ink.loss
         case .payout, .carry: return Ink.gain
-        case .forfeit, .split, .joined, .info: return Ink.text3
+        case .forfeit, .split, .joined, .info, .excused: return Ink.text3
         }
     }
 
-    /// .kept, .missed, .payout are the viewer's own lines.
+    /// .kept, .missed, .payout are the viewer's own lines. An .excused line may be yours too, but it has
+    /// no amount to colour and reads quiet whoever it is about.
     static func isOwn(_ kind: LedgerLine.Kind) -> Bool {
         kind == .kept || kind == .missed || kind == .payout
     }

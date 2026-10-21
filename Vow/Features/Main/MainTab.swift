@@ -1,8 +1,9 @@
 import Foundation
 
-/// The selected group's four pages, in tab-bar order.
+/// The selected group's five pages, in tab-bar order.
 enum MainTab: Int, CaseIterable, Identifiable {
     case home
+    case chat
     case streak
     case activity
     case group
@@ -12,6 +13,7 @@ enum MainTab: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .home: return "Home"
+        case .chat: return "Chat"
         case .streak: return "Streak"
         case .activity: return "Activity"
         case .group: return "Group"
@@ -22,6 +24,7 @@ enum MainTab: Int, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .home: return "house"
+        case .chat: return "bubble.left.and.bubble.right"
         case .streak: return "flame"
         case .activity: return "list.bullet.rectangle"
         case .group: return "person.2"

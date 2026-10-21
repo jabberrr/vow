@@ -3,6 +3,8 @@ import Foundation
 enum ChainBead: Equatable {
     case kept(day: Int)
     case missed(day: Int)
+    /// Sat out on an excuse that stood.
+    case excused(day: Int)
     case today(day: Int, kept: Bool)
     case upcoming
     case notJoined
@@ -29,20 +31,25 @@ enum CycleChain {
                 out.append(.notJoined)
             } else {
                 let index: Int = day - joined
-                if index >= 0 && index < history.count && history[index] == .kept {
+                let outcome: DayOutcome = index >= 0 && index < history.count ? history[index] : .missed
+                switch outcome {
+                case .kept:
                     out.append(.kept(day: day))
-                } else {
+                case .missed:
                     out.append(.missed(day: day))
+                case .excused:
+                    out.append(.excused(day: day))
                 }
             }
         }
         return out
     }
 
-    /// VoiceOver: "This cycle: 15 kept, 2 missed, today open".
+    /// VoiceOver: "This cycle: 15 kept, 2 missed, today open"; ", 1 excused" after the misses once any.
     static func summaryText(_ beads: [ChainBead]) -> String {
         var kept: Int = 0
         var missed: Int = 0
+        var excused: Int = 0
         var todayText: String = ""
         for bead in beads {
             switch bead {
@@ -50,6 +57,8 @@ enum CycleChain {
                 kept += 1
             case .missed:
                 missed += 1
+            case .excused:
+                excused += 1
             case .today(_, let isKept):
                 todayText = isKept ? "today kept" : "today open"
             case .upcoming, .notJoined:
@@ -57,6 +66,9 @@ enum CycleChain {
             }
         }
         var parts: [String] = ["\(kept) kept", "\(missed) missed"]
+        if excused > 0 {
+            parts.append("\(excused) excused")
+        }
         if !todayText.isEmpty {
             parts.append(todayText)
         }

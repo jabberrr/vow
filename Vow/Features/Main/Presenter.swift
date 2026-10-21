@@ -1,7 +1,7 @@
 import SwiftUI
 import Observation
 
-/// Every sheet the main shell can show. One at a time, and only through `Presenter`.
+/// Every sheet and full-screen cover the main shell can show. One at a time, and only through `Presenter`.
 enum MainSheet: Identifiable, Equatable {
     case create
     case join
@@ -11,6 +11,15 @@ enum MainSheet: Identifiable, Equatable {
     case settings
     case profile
     case reminderOffer
+    case excuse(GroupID)
+    /// A cover: the camera, for proof.
+    case camera(GroupID)
+    case library(GroupID)
+    /// A photo or video ready to caption and send as proof.
+    case proof(GroupID, MediaDraft)
+    /// A cover: one post's photo or video, full screen.
+    case media(GroupID, String)
+    case voteRule(GroupID)
 
     var id: String {
         switch self {
@@ -22,6 +31,33 @@ enum MainSheet: Identifiable, Equatable {
         case .settings: return "settings"
         case .profile: return "profile"
         case .reminderOffer: return "reminderOffer"
+        case .excuse(let g): return "excuse-" + g.zoneName
+        case .camera(let g): return "camera-" + g.zoneName
+        case .library(let g): return "library-" + g.zoneName
+        case .proof(let g, let draft): return "proof-" + g.zoneName + "-" + draft.mediaURL.lastPathComponent
+        case .media(let g, let postID): return "media-" + g.zoneName + "-" + postID
+        case .voteRule(let g): return "voteRule-" + g.zoneName
+        }
+    }
+
+    /// Shown with `.fullScreenCover` rather than `.sheet`: the camera, and photos and videos full screen.
+    var isCover: Bool {
+        switch self {
+        case .camera, .media:
+            return true
+        case .create, .join, .invite, .vow, .member, .settings, .profile, .reminderOffer, .excuse, .library, .proof,
+             .voteRule:
+            return false
+        }
+    }
+
+    /// Holds something you typed, picked or shot that closing it would throw away.
+    var holdsUnsavedWork: Bool {
+        switch self {
+        case .create, .excuse, .camera, .library, .proof:
+            return true
+        case .join, .invite, .vow, .member, .settings, .profile, .reminderOffer, .media, .voteRule:
+            return false
         }
     }
 }
@@ -31,6 +67,8 @@ enum MainDialog: Equatable {
     case leave(GroupID)
     case delete(GroupID)
     case resetTest(GroupID)
+    /// Home's Add proof: the camera or the library.
+    case proofSource(GroupID)
 }
 
 /// Who asked for a presentation.
@@ -41,22 +79,23 @@ enum PresentSource: Equatable {
     /// An item of a SwiftUI `Menu` on the main screen. The menu closes as a UIKit presentation with no
     /// callback, so the request also waits for that.
     case menu
-    /// A control in the sheet or dialog that is up (Invite after Create, Edit vow from your member sheet).
-    /// That one closes first.
+    /// A control in the sheet, cover or dialog that is up (Invite after Create, Edit vow from your member
+    /// sheet, the proof chooser's camera, proof after the camera or the library). That one closes first.
     case sheet
     /// The app itself (the vow prompt after joining, the reminder offer). Waits until nothing is up or
     /// asked for and the shell is not busy; never interrupts.
     case automatic
 }
 
-/// The one owner of the main shell's sheet and confirmation dialog.
+/// The one owner of the main shell's sheet, full-screen cover and confirmation dialog.
 ///
 /// idle → presenting (the sheet is set) → shown (its content's onAppear) → dismissing (cleared) → idle
-/// (onDismiss or the content's onDisappear, whichever comes first). A dialog counts as shown once it is set.
-/// Presenting and dismissing end on a deadline with no callback: a sheet that never appears is cleared and
-/// tried once more, and one that never reports its dismissal is taken as gone. Shown ends by the user, or
-/// by the next request, which closes it first. Nothing is set in the update that cleared something, nor
-/// within a settle pause of it.
+/// (onDismiss or the content's onDisappear, whichever comes first). A cover is a sheet shown another way:
+/// it takes the same slot and goes through the same phases, deadlines and callbacks. A dialog counts as
+/// shown once it is set. Presenting and dismissing end on a deadline with no callback: a sheet that never
+/// appears is cleared and tried once more, and one that never reports its dismissal is taken as gone. Shown
+/// ends by the user, or by the next request, which closes it first. Nothing is set in the update that
+/// cleared something, nor within a settle pause of it.
 @MainActor
 @Observable
 final class Presenter {
@@ -75,12 +114,16 @@ final class Presenter {
         case dismissing(MainSheet?)
     }
 
-    /// Read by `.sheet(item:)` through `sheetBinding`. Only this class writes it.
+    /// Read by `.sheet(item:)` through `sheetBinding` and by `.fullScreenCover(item:)` through
+    /// `coverBinding`. Only this class writes it.
     private(set) var sheet: MainSheet? = nil
     /// Read by `.confirmationDialog` through `dialogBinding` and `presenting:`.
     private(set) var dialog: MainDialog? = nil
     /// Nothing up, coming, going or asked for: the screen can be seen (the morning reveal waits for this).
     private(set) var isIdle: Bool = true
+    /// The sheet the user asked for next, while what is up still has to close first: the proof sheet
+    /// between the camera going and it rising. The shell treats it as already up.
+    private(set) var queued: MainSheet? = nil
 
     /// Asked just before an automatic request shows; by then the prompt may no longer apply.
     @ObservationIgnored var isStillWanted: (MainSheet) -> Bool = { (_: MainSheet) -> Bool in
@@ -136,7 +179,7 @@ final class Presenter {
         request(.sheet(s), from: source)
     }
 
-    /// Leave, delete, reset: from `.screen` or `.menu`.
+    /// Leave, delete, reset, the proof chooser: from `.screen` or `.menu`.
     func confirm(_ d: MainDialog, from source: PresentSource) {
         request(.dialog(d), from: source)
     }
@@ -172,16 +215,27 @@ final class Presenter {
 
     // MARK: - Bindings
 
-    /// SwiftUI writes nil on a swipe, on `dismiss()` and on a tap on the dimmed background.
+    /// SwiftUI writes nil on a swipe, on `dismiss()` and on a tap on the dimmed background. Sheets only.
     var sheetBinding: Binding<MainSheet?> {
+        return binding(covers: false)
+    }
+
+    /// The same slot for `.fullScreenCover(item:)`: covers only.
+    var coverBinding: Binding<MainSheet?> {
+        return binding(covers: true)
+    }
+
+    /// Each binding sees only its own kind, and a nil written through one never clears the other kind:
+    /// a late write from a sheet that has gone can't take down the cover that followed it.
+    private func binding(covers: Bool) -> Binding<MainSheet?> {
         return Binding<MainSheet?>(
             get: { [weak self] () -> MainSheet? in
-                return self?.sheet
+                guard let s: MainSheet = self?.sheet, s.isCover == covers else { return nil }
+                return s
             },
             set: { [weak self] (value: MainSheet?) -> Void in
-                if value == nil {
-                    self?.sheetCleared()
-                }
+                guard value == nil, let s: MainSheet = self?.sheet, s.isCover == covers else { return }
+                self?.sheetCleared()
             }
         )
     }
@@ -221,7 +275,8 @@ final class Presenter {
         }
     }
 
-    /// `.sheet(onDismiss:)` names no sheet, so it only completes a dismissal already under way.
+    /// `.sheet(onDismiss:)` and `.fullScreenCover(onDismiss:)` name no sheet, so they only complete a
+    /// dismissal already under way.
     func sheetDismissed() {
         guard case .dismissing = phase else { return }
         finish(after: Presenter.settle)
@@ -256,6 +311,13 @@ final class Presenter {
             let idle: Bool = phase == .idle && userPending == nil
             if isIdle != idle {
                 isIdle = idle
+            }
+            var next: MainSheet? = nil
+            if case .sheet(let s) = userPending {
+                next = s
+            }
+            if queued != next {
+                queued = next
             }
         }
         switch phase {

@@ -30,6 +30,14 @@ final class AppStore {
     var pendingVowPrompt: GroupID? = nil
     /// The most recent create/join failure, shown inside the sheet (a toast would sit behind it).
     private(set) var lastError: String? = nil
+    /// Proof uploads still running: post id → progress, 0...1. Gone when the save ends, either way.
+    private(set) var uploads: [String: Double] = [:]
+    /// Ids of your posts whose save failed. They stay in the chat, unsent, until `retryPost` or
+    /// `discardPost`. Never cached, so a relaunch or "Reset local data" drops them.
+    private(set) var failedPosts: Set<String> = []
+    /// zoneName → the newest record that group's Chat showed when you last looked. Mirrors Preferences
+    /// so the chat dot updates as you read.
+    private(set) var chatSeenAt: [String: Date] = [:]
 
     private var testingModeStorage: Bool = false
 
@@ -51,13 +59,23 @@ final class AppStore {
     @ObservationIgnored private var bootstrapInFlight: Bool = false
     @ObservationIgnored private var themeCache: [GroupID: DailyTheme] = [:]
     @ObservationIgnored private var inFlightCheckIns: Set<CheckInInfo> = []
+    @ObservationIgnored private var inFlightExcuses: Set<ExcuseInfo> = []
+    @ObservationIgnored private var inFlightVotes: Set<VoteInfo> = []
+    /// Ids of posts still being saved.
+    @ObservationIgnored private var inFlightPosts: Set<String> = []
+    /// The drafts of failed proofs, by post id: their files wait in the outbox for a retry.
+    @ObservationIgnored private var failedDrafts: [String: MediaDraft] = [:]
     /// Test groups with a Next day or a reset still running. Both save the whole group record, so either
     /// is ignored while one runs: a late Next day can't write the old epoch back over a reset.
     @ObservationIgnored private var testDayInFlight: Set<GroupID> = []
+    /// Groups whose voting rule is being saved. A second change is ignored until the first ends, so
+    /// each one is worked out from the log the last one left.
+    @ObservationIgnored private var voteRuleInFlight: Set<GroupID> = []
 
     init() {
         profile = prefs.loadProfile()
         testingModeStorage = prefs.loadTestingMode()
+        chatSeenAt = prefs.loadChatSeen()
         let cachedUserID: String? = prefs.loadUserID()
         userID = cachedUserID
         if let payload = cache.load(), payload.userID == nil || payload.userID == cachedUserID {
@@ -78,6 +96,10 @@ final class AppStore {
         // With a known account and cached data, show it immediately; bootstrap re-validates.
         if cachedUserID != nil && !snapshots.isEmpty {
             phase = .ready
+        }
+        // Drafts live only in memory, so what an earlier launch left in the outbox can never be sent.
+        if !AppStore.isRunningUnitTests {
+            try? FileManager.default.removeItem(at: MediaPrep.outbox)
         }
     }
 
@@ -107,11 +129,14 @@ final class AppStore {
 
             let uid: String = try await cloud.currentUserID()
             if let old = userID, old != uid {
-                // Different iCloud account: the cached groups belong to someone else.
+                // Different iCloud account: the cached groups and their photos belong to someone else.
                 snapshots = [:]
                 groupIDs = []
                 themeCache = [:]
+                failedPosts = []
+                failedDrafts = [:]
                 cache.clear()
+                MediaCache.shared.clearAll()
             }
             userID = uid
             prefs.saveUserID(uid)
@@ -181,19 +206,29 @@ final class AppStore {
         for id in keysAtStart where snapshots[id] == nil {
             fresh[id] = nil
         }
-        // Re-merge with the current state: check-ins saved while the fetches were running must survive.
+        // Re-merge with the current state: check-ins saved while the fetches were running must survive. A
+        // group the fetch brought nothing new for keeps its current value.
         for (id, s) in fresh {
             if let current = snapshots[id] {
-                fresh[id] = merged(s, previous: current)
+                let next: GroupSnapshot = merged(s, previous: current)
+                fresh[id] = AppStore.sameContent(next, current) ? current : next
             }
         }
 
-        snapshots = fresh
-        if let p = pendingVowPrompt, fresh[p] == nil {
-            pendingVowPrompt = nil
+        // Writing `snapshots` re-renders every view that reads it, and persisting encodes every group.
+        if fresh != snapshots {
+            // A group that has gone (its owner deleted it, or you left on another device) takes its media.
+            for id in snapshots.keys where fresh[id] == nil {
+                MediaCache.shared.removeGroup(id)
+            }
+            snapshots = fresh
+            if let p = pendingVowPrompt, fresh[p] == nil {
+                pendingVowPrompt = nil
+            }
+            pruneFailedPosts()
+            reorder()
+            persist()
         }
-        reorder()
-        persist()
         lastSyncedAt = Date()
 
         if let e = firstError, !CloudErrors.isNetwork(e) {
@@ -258,11 +293,15 @@ final class AppStore {
     func resetLocalData() {
         prefs.clearAll()
         cache.clear()
+        MediaCache.shared.clearAll()
+        chatSeenAt = [:]
         profile = nil
         testingModeStorage = false
         snapshots = [:]
         groupIDs = []
         themeCache = [:]
+        failedPosts = []
+        failedDrafts = [:]
         pendingVowPrompt = nil
         toast = nil
         lastSyncedAt = nil
@@ -379,6 +418,14 @@ final class AppStore {
         toast = message
     }
 
+    /// Everyone's records count against the group owner's iCloud storage, so when it is full only the owner
+    /// can free it: members are told whose it is. nil for any other failure, and for the owner, who gets
+    /// the usual message.
+    private func ownerStorageFull(_ error: Error, in id: GroupID) -> String? {
+        guard CloudErrors.code(error) == .quotaExceeded, !isOwner(id) else { return nil }
+        return "The group owner's iCloud storage is full."
+    }
+
     func join(url: URL) async -> Bool {
         lastError = nil
         do {
@@ -463,6 +510,8 @@ final class AppStore {
         let epoch: Int = s.group.epoch
         let already: Bool = s.checkIns.contains(where: { $0.userID == uid && $0.day == day && $0.epoch == epoch })
         if already { return }
+        // An excuse closes today's orb for good.
+        if AppStore.hasExcuse(uid, day: day, in: s) { return }
 
         let pending = CheckInInfo(userID: uid, day: day, epoch: epoch, serverDate: nil)
         inFlightCheckIns.insert(pending)
@@ -484,7 +533,7 @@ final class AppStore {
                 cur.checkIns.removeAll(where: { $0 == pending })
                 snapshots[id] = cur
             }
-            toast = "Couldn't check in. Try again."
+            toast = ownerStorageFull(error, in: id) ?? "Couldn't check in. Try again."
         }
     }
 
@@ -513,6 +562,7 @@ final class AppStore {
         do {
             try await cloud.saveGroup(g)
             setGroup(g)
+            pruneFailedPosts()
             persist()
             toast = "Group reset."
             await refresh(id)
@@ -564,33 +614,407 @@ final class AppStore {
         }
     }
 
+    // MARK: - Chat
+
+    /// Sends today's excuse, which closes today's orb for good: it can't be withdrawn, and a day you
+    /// checked in can't be excused (`canExcuse`). False if it wasn't sent; after a failed save the toast
+    /// says so.
+    @discardableResult
+    func sendExcuse(_ text: String, in id: GroupID) async -> Bool {
+        let body: String = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now: Date = Date()
+        guard !body.isEmpty, body.count <= Records.excuseTextLimit, canExcuse(id, now: now),
+              let uid = userID, let s = snapshots[id] else { return false }
+        let day: Int = DayClock.currentDay(s.group, now: now)
+        let epoch: Int = s.group.epoch
+
+        let pending = ExcuseInfo(userID: uid, day: day, epoch: epoch, text: body, serverDate: nil)
+        inFlightExcuses.insert(pending)
+        defer { inFlightExcuses.remove(pending) }
+        var optimistic: GroupSnapshot = s
+        optimistic.excuses.append(pending)
+        snapshots[id] = optimistic
+
+        do {
+            let saved: ExcuseInfo = try await cloud.saveExcuse(pending, in: id)
+            if var cur = snapshots[id] {
+                cur.excuses.removeAll(where: { $0.userID == uid && $0.day == day && $0.epoch == epoch })
+                cur.excuses.append(saved)
+                snapshots[id] = cur
+            }
+            persist()
+            refreshSoon(id)
+            return true
+        } catch {
+            if var cur = snapshots[id] {
+                cur.excuses.removeAll(where: { $0 == pending })
+                snapshots[id] = cur
+            }
+            toast = ownerStorageFull(error, in: id) ?? "Couldn't send your excuse. Try again."
+            return false
+        }
+    }
+
+    /// Casts or changes your vote on `subject`'s check-in or excuse for `day`. Ignored unless you are one
+    /// of its voters and voting on that day is open, and while your last vote on it is still saving: two
+    /// saves of one record could land out of order. A change is also ignored in voting's last half hour
+    /// (`Review.canChangeVote`), where it could land after the close and take the vote it replaces with it.
+    func vote(subject: String, day: Int, counts: Bool, in id: GroupID) async {
+        guard let uid = userID, uid != subject, let s = snapshots[id] else { return }
+        let now: Date = Date()
+        guard Review.isOpen(day: day, group: s.group, now: now),
+              Review.eligibleVoters(subject: subject, day: day, snapshot: s).contains(uid) else { return }
+        let pending = VoteInfo(voterID: uid, subjectID: subject, day: day, epoch: s.group.epoch, counts: counts,
+                               castDay: DayClock.currentDay(s.group, now: now), serverDate: nil)
+        if inFlightVotes.contains(where: { (v: VoteInfo) -> Bool in AppStore.sameVote(v, pending) }) { return }
+        let previous: VoteInfo? = s.votes.first(where: { (v: VoteInfo) -> Bool in AppStore.sameVote(v, pending) })
+        if previous?.counts == counts { return }
+        if previous != nil && !Review.canChangeVote(day: day, group: s.group, now: now) { return }
+
+        inFlightVotes.insert(pending)
+        defer { inFlightVotes.remove(pending) }
+        setVote(pending, in: id)
+
+        do {
+            let saved: VoteInfo = try await cloud.saveVote(pending, in: id)
+            setVote(saved, in: id)
+            persist()
+        } catch {
+            if let p = previous {
+                setVote(p, in: id)
+            } else {
+                removeVote(pending, in: id)
+            }
+            toast = ownerStorageFull(error, in: id) ?? "Couldn't vote. Try again."
+        }
+    }
+
+    /// False if it wasn't sent. A failed save keeps the message in `failedPosts`, with no toast unless the
+    /// group owner's storage is full.
+    @discardableResult
+    func sendMessage(_ text: String, in id: GroupID) async -> Bool {
+        let body: String = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, body.count <= Records.postTextLimit, let s = snapshots[id] else { return false }
+        let today: Int = DayClock.currentDay(s.group, now: Date())
+        guard let post: PostInfo = newPost(body, draft: nil, day: today, in: id) else { return false }
+        return await sendPost(post, draft: nil, in: id)
+    }
+
+    /// Posts a photo or video as proof for your claim on `Review.proofDay`: today's check-in or excuse, else
+    /// yesterday's while the group can still vote on it. The store takes the draft: its files become the
+    /// post's cached media at once, so it shows while `uploads` tracks the upload, and they go once it's
+    /// sent or discarded. Refused (no proof day, or not an active member): false, the files deleted and no
+    /// toast. A failed save keeps the post in `failedPosts`, with no toast unless the group owner's storage
+    /// is full.
+    @discardableResult
+    func sendProof(_ draft: MediaDraft, caption: String, in id: GroupID) async -> Bool {
+        let body: String = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.count <= Records.postTextLimit, let uid = userID, let s = snapshots[id],
+              let day: Int = Review.proofDay(for: uid, snapshot: s, now: Date()),
+              let post: PostInfo = newPost(body, draft: draft, day: day, in: id) else {
+            MediaPrep.discard(draft)
+            return false
+        }
+        MediaCache.shared.adopt(draft, postID: post.id, in: id)
+        return await sendPost(post, draft: draft, in: id)
+    }
+
+    /// Sends a failed post again, as it was: same id, day and text, and a proof's draft. A proof whose
+    /// voting has closed meanwhile still goes: it was sent in time. False if it failed again (it stays in
+    /// `failedPosts`) or isn't a failed post.
+    @discardableResult
+    func retryPost(_ postID: String, in id: GroupID) async -> Bool {
+        guard failedPosts.contains(postID), !inFlightPosts.contains(postID),
+              let post = snapshots[id]?.posts.first(where: { $0.id == postID }) else { return false }
+        let draft: MediaDraft? = failedDrafts[postID]
+        // A photo or video can't go without its files.
+        if post.media != MediaKind.none && draft == nil { return false }
+        return await sendPost(post, draft: draft, in: id)
+    }
+
+    /// Deletes a post that failed to send, with its draft's files. Only a failed post: nothing sent is taken
+    /// back.
+    func discardPost(_ postID: String, in id: GroupID) {
+        guard failedPosts.contains(postID), !inFlightPosts.contains(postID) else { return }
+        failedPosts.remove(postID)
+        if let draft: MediaDraft = failedDrafts.removeValue(forKey: postID) {
+            MediaPrep.discard(draft)
+        }
+        MediaCache.shared.remove(postID: postID, in: id)
+        if var s = snapshots[id] {
+            s.posts.removeAll(where: { $0.id == postID })
+            snapshots[id] = s
+        }
+    }
+
+    /// The owner picks how many voters it takes to overrule a claim. The change applies from tomorrow,
+    /// so no day already under way re-settles under it, and a finished vow, which has no tomorrow, keeps
+    /// its rule. Refreshes first, so the change is worked out against the current log.
+    func setVoteRule(_ rule: VoteRule, in id: GroupID) async {
+        guard isOwner(id), snapshots[id] != nil, !voteRuleInFlight.contains(id),
+              !testDayInFlight.contains(id) else { return }
+        voteRuleInFlight.insert(id)
+        defer { voteRuleInFlight.remove(id) }
+        await refresh(id)
+        let now: Date = Date()
+        guard let group = snapshots[id]?.group, !EndDate.isFinished(group, now: now) else { return }
+        let rules: [VoteRuleChange] = Review.changing(group, to: rule, now: now)
+        if rules == (group.voteRules ?? []) { return }
+
+        do {
+            try await cloud.saveVoteRules(rules, in: id)
+            if var cur = snapshots[id] {
+                cur.group.voteRules = rules
+                snapshots[id] = cur
+            }
+            persist()
+            // Picking today's rule only takes back a change that was due tomorrow.
+            let today: VoteRule = Review.rule(forDay: DayClock.currentDay(group, now: now), group: group)
+            toast = rule == today ? "Voting rule change cancelled." : "Voting rule changes tomorrow."
+        } catch {
+            toast = "Couldn't change the voting rule. Try again."
+        }
+    }
+
+    /// You have caught up with the group's Chat. Stores the newest server date the chat dot answers to
+    /// rather than the device's clock, so a fast clock can't hide what arrives next; it never moves back.
+    func markChatSeen(_ id: GroupID) {
+        guard let s = snapshots[id], let newest: Date = AppStore.latestChatActivity(s, excluding: userID) else { return }
+        let zone: String = id.zoneName
+        if let seen: Date = chatSeenAt[zone], seen >= newest { return }
+        chatSeenAt[zone] = newest
+        prefs.saveChatSeen(zone: zone, date: newest)
+    }
+
+    /// A new post by you, dated with group day `day`; nil unless you are an active member.
+    private func newPost(_ text: String, draft: MediaDraft?, day: Int, in id: GroupID) -> PostInfo? {
+        guard let uid = userID, let s = snapshots[id], let me = myMember(id), me.leftDay == nil else { return nil }
+        return PostInfo(id: "post-\(UUID().uuidString)",
+                        authorID: uid,
+                        text: text,
+                        day: day,
+                        epoch: s.group.epoch,
+                        isProof: draft != nil,
+                        media: draft?.kind ?? MediaKind.none,
+                        aspect: draft?.aspect,
+                        duration: draft?.duration,
+                        serverDate: nil)
+    }
+
+    /// Shows `post` at once, then saves it with the draft's files, which are deleted once it's sent. On
+    /// failure the post stays, marked in `failedPosts`, and keeps its draft for a retry, unless a reset or a
+    /// removed group has taken it meanwhile.
+    private func sendPost(_ post: PostInfo, draft: MediaDraft?, in id: GroupID) async -> Bool {
+        let postID: String = post.id
+        inFlightPosts.insert(postID)
+        if failedPosts.contains(postID) {
+            failedPosts.remove(postID)
+        }
+        if draft != nil {
+            uploads[postID] = 0
+        }
+        defer {
+            inFlightPosts.remove(postID)
+            if draft != nil {
+                uploads[postID] = nil
+            }
+        }
+        setPost(post, in: id)
+        let progress: @Sendable (Double) -> Void = { [weak self] (fraction: Double) in
+            guard let store: AppStore = self else { return }
+            Task { @MainActor in
+                store.setUpload(fraction, for: postID)
+            }
+        }
+
+        do {
+            let saved: PostInfo = try await cloud.savePost(post, mediaURL: draft?.mediaURL, thumbURL: draft?.thumbURL,
+                                                           in: id, progress: progress)
+            setPost(saved, in: id)
+            persist()
+            failedDrafts[postID] = nil
+            if let sent: MediaDraft = draft {
+                MediaPrep.discard(sent)
+            }
+            refreshSoon(id)
+            return true
+        } catch {
+            if let s = snapshots[id], s.group.epoch == post.epoch, s.posts.contains(where: { $0.id == postID }) {
+                failedPosts.insert(postID)
+                failedDrafts[postID] = draft
+            } else if let orphan: MediaDraft = draft {
+                MediaPrep.discard(orphan)
+            }
+            // A retry can't help until the owner frees space, so this one failure is said out loud.
+            if let full: String = ownerStorageFull(error, in: id) {
+                toast = full
+            }
+            return false
+        }
+    }
+
+    /// After your own send: replies that landed meanwhile show without waiting for the next poll.
+    private func refreshSoon(_ id: GroupID) {
+        Task { await self.refresh(id) }
+    }
+
+    /// Ignores reports that hop to the main actor after the upload has ended, and steps under 1 %,
+    /// which would only redraw the ring.
+    private func setUpload(_ fraction: Double, for postID: String) {
+        guard let current: Double = uploads[postID] else { return }
+        let next: Double = min(1, max(current, fraction))
+        guard next > current, next == 1 || next - current >= 0.01 else { return }
+        uploads[postID] = next
+    }
+
     // MARK: - Local state helpers
 
-    /// Keeps optimistic (pending, still being saved) check-ins the server doesn't know about yet, and
-    /// server-confirmed check-ins a fetch that started before their save didn't see. Check-in records are
-    /// never deleted (resets bump the epoch), so a confirmed one can always be kept.
+    /// Keeps optimistic (pending, still being saved) records the server doesn't know about yet, your failed
+    /// posts, and server-confirmed records a fetch that started before their save didn't see. Check-ins,
+    /// excuses and posts are never deleted (resets bump the epoch), so a confirmed one can always be kept.
+    /// A vote is overwritten when its voter changes their mind, so yours wins over the fetched copy while
+    /// it is saving, and a confirmed one only if the server changed it later than the fetched copy says.
     private func merged(_ incoming: GroupSnapshot, previous: GroupSnapshot?) -> GroupSnapshot {
         guard let prev = previous else { return incoming }
         var out: GroupSnapshot = incoming
+        var checkIns: Set<DayKey> = []
+        for c in out.checkIns {
+            checkIns.insert(DayKey(userID: c.userID, day: c.day, epoch: c.epoch))
+        }
         for c in prev.checkIns where c.serverDate != nil || inFlightCheckIns.contains(c) {
-            let known: Bool = out.checkIns.contains(where: {
-                $0.userID == c.userID && $0.day == c.day && $0.epoch == c.epoch
-            })
-            if !known {
+            if checkIns.insert(DayKey(userID: c.userID, day: c.day, epoch: c.epoch)).inserted {
                 out.checkIns.append(c)
+            }
+        }
+        var excuses: Set<DayKey> = []
+        for e in out.excuses {
+            excuses.insert(DayKey(userID: e.userID, day: e.day, epoch: e.epoch))
+        }
+        for e in prev.excuses where e.serverDate != nil || inFlightExcuses.contains(e) {
+            if excuses.insert(DayKey(userID: e.userID, day: e.day, epoch: e.epoch)).inserted {
+                out.excuses.append(e)
+            }
+        }
+        // Index of the first fetched copy of each vote.
+        var votes: [VoteKey: Int] = [:]
+        for (i, v) in out.votes.enumerated() where votes[VoteKey(v)] == nil {
+            votes[VoteKey(v)] = i
+        }
+        for v in prev.votes where v.serverDate != nil || inFlightVotes.contains(v) {
+            let key: VoteKey = VoteKey(v)
+            if let i = votes[key] {
+                let fetchedChange: Date = out.votes[i].serverDate ?? .distantPast
+                if inFlightVotes.contains(v) || (v.serverDate ?? .distantPast) > fetchedChange {
+                    out.votes[i] = v
+                }
+            } else {
+                votes[key] = out.votes.count
+                out.votes.append(v)
+            }
+        }
+        var posts: Set<String> = []
+        for p in out.posts {
+            posts.insert(p.id)
+        }
+        for p in prev.posts where p.serverDate != nil || inFlightPosts.contains(p.id) || failedPosts.contains(p.id) {
+            if posts.insert(p.id).inserted {
+                out.posts.append(p)
             }
         }
         return out
     }
 
+    /// Equal apart from when each was fetched: a refresh that brought nothing new.
+    private static func sameContent(_ a: GroupSnapshot, _ b: GroupSnapshot) -> Bool {
+        var aligned: GroupSnapshot = a
+        aligned.fetchedAt = b.fetchedAt
+        return aligned == b
+    }
+
+    /// One vote per voter, subject, day and epoch: the vote record's identity.
+    private static func sameVote(_ a: VoteInfo, _ b: VoteInfo) -> Bool {
+        return VoteKey(a) == VoteKey(b)
+    }
+
+    /// A check-in's or an excuse's identity, as its record name spells it: who, which day, which epoch.
+    private struct DayKey: Hashable {
+        let userID: String
+        let day: Int
+        let epoch: Int
+    }
+
+    /// A vote's identity: voting again overwrites the record.
+    private struct VoteKey: Hashable {
+        let voterID: String
+        let subjectID: String
+        let day: Int
+        let epoch: Int
+
+        init(_ v: VoteInfo) {
+            voterID = v.voterID
+            subjectID = v.subjectID
+            day = v.day
+            epoch = v.epoch
+        }
+    }
+
+    /// Puts `vote` in place of the one it overwrites, if any.
+    private func setVote(_ vote: VoteInfo, in id: GroupID) {
+        guard var s = snapshots[id] else { return }
+        s.votes.removeAll(where: { (v: VoteInfo) -> Bool in AppStore.sameVote(v, vote) })
+        s.votes.append(vote)
+        snapshots[id] = s
+    }
+
+    private func removeVote(_ vote: VoteInfo, in id: GroupID) {
+        guard var s = snapshots[id] else { return }
+        s.votes.removeAll(where: { $0 == vote })
+        snapshots[id] = s
+    }
+
+    /// Puts `post` in place of the one with its id (a pending copy), or adds it.
+    private func setPost(_ post: PostInfo, in id: GroupID) {
+        guard var s = snapshots[id] else { return }
+        if let i = s.posts.firstIndex(where: { $0.id == post.id }) {
+            s.posts[i] = post
+        } else {
+            s.posts.append(post)
+        }
+        snapshots[id] = s
+    }
+
+    /// Skips a snapshot that brings nothing new: writing it would re-render every view that reads
+    /// `snapshots`, and persisting encodes every group.
     private func upsert(_ s: GroupSnapshot) {
         let id: GroupID = s.group.id
+        if let current = snapshots[id], AppStore.sameContent(s, current), groupIDs.contains(id) { return }
         snapshots[id] = s
         if !groupIDs.contains(id) {
             groupIDs.append(id)
             reorder()
         }
+        pruneFailedPosts()
         persist()
+    }
+
+    /// A failed post stays failed only while it is still here, unsent, in its group's epoch: a fetch can
+    /// show it saved after all (its save landed but the reply was lost), a group that has gone takes its
+    /// posts with it, and a test group's reset leaves the old epoch's posts out of Chat, where nobody could
+    /// retry or delete them. Either way its draft's files go, and the next fetch drops an unsent one.
+    private func pruneFailedPosts() {
+        if failedPosts.isEmpty { return }
+        var unsent: Set<String> = []
+        for s in snapshots.values {
+            for p in s.posts where p.serverDate == nil && p.epoch == s.group.epoch && failedPosts.contains(p.id) {
+                unsent.insert(p.id)
+            }
+        }
+        for postID in failedPosts.subtracting(unsent) {
+            failedPosts.remove(postID)
+            if let draft: MediaDraft = failedDrafts.removeValue(forKey: postID) {
+                MediaPrep.discard(draft)
+            }
+        }
     }
 
     private func setGroup(_ g: GroupInfo) {
@@ -619,13 +1043,16 @@ final class AppStore {
         snapshots[id] = s
     }
 
+    /// Forgets a group you left or deleted, or that has gone, with its downloaded photos and videos.
     private func removeLocal(_ id: GroupID) {
         snapshots[id] = nil
         groupIDs.removeAll(where: { $0 == id })
         themeCache[id] = nil
+        MediaCache.shared.removeGroup(id)
         if pendingVowPrompt == id {
             pendingVowPrompt = nil
         }
+        pruneFailedPosts()
         persist()
     }
 
@@ -638,15 +1065,21 @@ final class AppStore {
             }
             return a.group.id.zoneName < b.group.id.zoneName
         }
-        groupIDs = sorted.map { $0.group.id }
+        let order: [GroupID] = sorted.map { $0.group.id }
+        if order != groupIDs {
+            groupIDs = order
+        }
     }
 
     private func persist() {
         var list: [GroupSnapshot] = []
         for id in groupIDs {
             if var s = snapshots[id] {
-                // Never cache optimistic check-ins: they'd outlive their save attempt.
+                // Never cache optimistic records: they'd outlive their save attempt.
                 s.checkIns.removeAll(where: { $0.serverDate == nil })
+                s.excuses.removeAll(where: { $0.serverDate == nil })
+                s.votes.removeAll(where: { $0.serverDate == nil })
+                s.posts.removeAll(where: { $0.serverDate == nil })
                 list.append(s)
             }
         }

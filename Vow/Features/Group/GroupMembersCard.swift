@@ -3,6 +3,7 @@ import SwiftUI
 /// "Members" on the Group page: everyone in `summary.standings` order (you first, then by name) with
 /// today's status, streak and net, then Invite. Only your own net is coloured; friends' nets stay grey,
 /// streaks carry the comparison, and a friend who hasn't checked in yet is "not yet", never "missed".
+/// Someone sitting today out on an excuse has a dashed ring and drops out of the kept count.
 struct GroupMembersCard: View {
     let summary: GroupSummary
     let viewerID: String
@@ -27,24 +28,30 @@ struct GroupMembersCard: View {
         self.onInvite = onInvite
     }
 
-    /// Home's strip count: "2 of 5 kept today" / "Everyone kept today". None once the vow is finished,
-    /// since nobody has a today then.
-    private var keptNote: String? {
-        guard !summary.isFinished else { return nil }
-        let kept: Int = Digest.keptCount(summary.standings)
-        let total: Int = summary.standings.count
-        if total >= 2 && kept == total {
-            return "Everyone kept today"
-        }
-        return "\(kept) of \(total) kept today"
+    /// Home's strip count. None once the vow is finished, since nobody has a today then.
+    private var keptNote: KeptNote? {
+        guard !summary.isFinished, !summary.standings.isEmpty else { return nil }
+        return KeptNote(summary.standings.map { (s: MemberStanding) -> MemberDay in
+            MemberDay.of(s, isViewer: s.userID == viewerID)
+        })
     }
 
     var body: some View {
         let theme: DailyTheme = Overview.theme(summary)
         return VStack(alignment: .leading, spacing: 0) {
-            SectionTitle("Members", trailing: keptNote)
+            header
             card(theme)
         }
+    }
+
+    /// One VoiceOver header: "Members", with the count as its value.
+    private var header: some View {
+        let note: KeptNote? = keptNote
+        return SectionTitle("Members", trailing: note?.text)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Members")
+            .accessibilityValue(note?.spoken ?? "")
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func card(_ theme: DailyTheme) -> some View {
@@ -96,15 +103,14 @@ private struct GroupMemberRow: View {
         self.onSelect = onSelect
     }
 
-    /// Lit = kept today; your open vow is ringed. Nobody is lit or ringed once the vow is finished.
+    /// nil once the vow is finished: nobody has a today then.
+    private var today: MemberDay? {
+        isFinished ? nil : MemberDay.of(row, isViewer: isViewer)
+    }
+
+    /// Nobody is lit or ringed once the vow is finished.
     private var state: SphereState {
-        if isFinished {
-            return .unlit
-        }
-        if row.checkedInToday {
-            return .lit
-        }
-        return isViewer ? .open : .unlit
+        today?.sphere ?? .unlit
     }
 
     private var name: String {
@@ -115,25 +121,14 @@ private struct GroupMemberRow: View {
         VowFormat.short(row.vow)
     }
 
-    /// nil once the vow is finished: there is no today to report.
-    private var status: String? {
-        if isFinished {
-            return nil
-        }
-        if row.checkedInToday {
-            return "kept today"
-        }
-        return isViewer ? "your turn" : "not yet"
-    }
-
     /// "Maya, Swim 40 lengths, kept today, 21-day streak, plus 6.25 points"
     private var spoken: String {
         var parts: [String] = [name]
         if !shortVow.isEmpty {
             parts.append(shortVow)
         }
-        if let today: String = status {
-            parts.append(today)
+        if let day: MemberDay = today {
+            parts.append(day.phrase)
         }
         parts.append(row.streak == 1 ? "1-day streak" : "\(row.streak)-day streak")
         parts.append(MemberText.netSpoken(row.net))
@@ -198,7 +193,8 @@ private struct GroupMemberRow: View {
     }
 }
 
-/// Invite as an empty seat (a dashed circle) at the end of the list it adds to.
+/// Invite as an empty seat at the end of the list it adds to: a solid disc with a plus, like the sidebar's
+/// Add group (a dashed ring means excused).
 private struct GroupInviteRow: View {
     let action: () -> Void
 
@@ -225,15 +221,117 @@ private struct GroupInviteRow: View {
     }
 
     private var seat: some View {
-        ZStack {
-            Circle()
-                .strokeBorder(Color.white.opacity(0.28), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-            Image(systemName: "plus")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Ink.text)
+        Image(systemName: "plus")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Ink.text)
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(Ink.field))
+            .accessibilityHidden(true)
+    }
+}
+
+/// Where a member's today stands, the one reading behind Home's strip, the Group page and the member sheet:
+/// a check-in or an excuse that stands, either one overruled by the votes so far, your turn, or a friend's
+/// "not yet" (never "missed").
+enum MemberDay: Equatable {
+    case kept, excused, overruled, yourTurn, notYet
+
+    /// `viewerLit` is Home's hold: your check-in lights your sphere and your place in the count at the
+    /// cascade's social beat, not at the seal, so until then it is still your turn. An excuse shows at once
+    /// (it lands behind its sheet). Nothing else is on screen during a check-in, so it holds nothing.
+    static func of(_ member: MemberStanding, isViewer: Bool, viewerLit: Bool = true) -> MemberDay {
+        if isViewer && member.checkedInToday && !viewerLit {
+            return .yourTurn
         }
-        .frame(width: 32, height: 32)
-        .accessibilityHidden(true)
+        if Digest.checkInStands(member) {
+            return .kept
+        }
+        if Digest.excuseStands(member) {
+            return .excused
+        }
+        if member.checkedInToday || member.excusedToday {
+            return .overruled
+        }
+        return isViewer ? .yourTurn : .notYet
+    }
+
+    /// Lit while a check-in stands, a dashed ring while an excuse stands, ringed on your turn; an
+    /// overruled claim and a friend's "not yet" are unlit.
+    var sphere: SphereState {
+        switch self {
+        case .kept: return .lit
+        case .excused: return .excused
+        case .yourTurn: return .open
+        case .overruled, .notYet: return .unlit
+        }
+    }
+
+    /// Within a spoken row: "kept today", "excused today", "overruled", "your turn", "not yet".
+    var phrase: String {
+        switch self {
+        case .kept: return "kept today"
+        case .excused: return "excused today"
+        case .overruled: return "overruled"
+        case .yourTurn: return "your turn"
+        case .notYet: return "not yet"
+        }
+    }
+
+    /// On its own (the member sheet): "Kept today", "Excused today", "Overruled", "Your turn", "Not yet".
+    var title: String {
+        switch self {
+        case .kept: return "Kept today"
+        case .excused: return "Excused today"
+        case .overruled: return "Overruled"
+        case .yourTurn: return "Your turn"
+        case .notYet: return "Not yet"
+        }
+    }
+}
+
+/// Today's count, from the same `MemberDay`s the spheres show, so the two never disagree: "2 of 4 kept today",
+/// "Everyone kept today" (two or more), "Everyone's excused today". Anyone sitting the day out on an excuse
+/// that stands is left out of it. Home's strip and the Group page's Members header both say it.
+struct KeptNote {
+    let kept: Int
+    let excused: Int
+    /// Everyone the day counts: all but the excused.
+    let counted: Int
+
+    init(_ days: [MemberDay]) {
+        var kept: Int = 0
+        for day in days where day == .kept {
+            kept += 1
+        }
+        var excused: Int = 0
+        for day in days where day == .excused {
+            excused += 1
+        }
+        self.kept = kept
+        self.excused = excused
+        self.counted = days.count - excused
+    }
+
+    var everyoneKept: Bool {
+        counted >= 2 && kept == counted
+    }
+
+    var text: String {
+        if counted == 0 && excused > 0 {
+            return "Everyone's excused today"
+        }
+        if everyoneKept {
+            return "Everyone kept today"
+        }
+        return "\(kept) of \(counted) kept today"
+    }
+
+    /// The text, and how many sit today out unless everyone does: "2 of 4 kept today, 1 excused".
+    var spoken: String {
+        if excused == 0 || counted == 0 {
+            return text
+        }
+        return text + ", \(excused) excused"
     }
 }
 

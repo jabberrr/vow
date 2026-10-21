@@ -4,6 +4,7 @@ import XCTest
 final class StreaksTests: XCTestCase {
     private let k: DayOutcome = .kept
     private let m: DayOutcome = .missed
+    private let e: DayOutcome = .excused
 
     func testIsMilestone() {
         for n in [3, 7, 14, 30, 50, 100, 150, 200, 250, 300, 365, 400, 500, 1000] {
@@ -38,6 +39,13 @@ final class StreaksTests: XCTestCase {
         XCTAssertEqual(StreakEvents.previousRecord([k, k, k, k, k]), 0)
         XCTAssertEqual(StreakEvents.previousRecord([k, k, m, k]), 2)
         XCTAssertEqual(StreakEvents.previousRecord([k, k, k, m, k, k, k, k, m, k]), 4)
+    }
+
+    func testExcusedDaysNeitherBreakNorExtendARecord() {
+        XCTAssertEqual(StreakEvents.previousRecord([k, k, e, k, m, k]), 3)
+        XCTAssertEqual(StreakEvents.previousRecord([k, m, e, k, k, e]), 1)
+        XCTAssertEqual(StreakEvents.previousRecord([e, e, m]), 0)
+        XCTAssertEqual(StreakEvents.event(streak: 5, history: [k, k, e, k, k, m, k, e, k, k, k]), .newBest(5))
     }
 
     func testMilestoneEvent() {

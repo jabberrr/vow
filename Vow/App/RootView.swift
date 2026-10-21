@@ -3,13 +3,13 @@ import Accessibility
 
 /// Picks the screen for the app's state. Owns the room-dim flag (set by the stage during a hold) and
 /// the toast. A toast waits while the room is dimmed and shows when the lights come back; one that a
-/// sheet, a dialog or the sidebar keeps waiting is dropped after a short while, since it would only be
-/// seen behind or after them. It sits below the shell's measured top bar and takes no touches.
+/// sheet, a cover, a dialog or the sidebar keeps waiting is dropped after a short while, since it would
+/// only be seen behind or after them. It sits below the shell's measured top bar and takes no touches.
 struct RootView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var roomDimmed: Bool = false
-    /// From the shell: a sheet, a dialog or the sidebar is up.
+    /// From the shell: a sheet, a cover, a dialog or the sidebar is up.
     @State private var toastBlocked: Bool = false
     /// From the shell: the top bar's height, its banner included.
     @State private var topBarHeight: CGFloat = RootView.barHeight

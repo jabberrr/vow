@@ -20,10 +20,10 @@ final class VowStatusTests: XCTestCase {
                          shareURL: nil)
     }
 
-    private func me(kept: Bool) -> MemberStanding {
+    private func me(kept: Bool, excused: Bool = false, overruled: Bool = false) -> MemberStanding {
         return MemberStanding(userID: "me", displayName: "Ava", vow: "I will read", isActive: true, net: 0,
-                              streak: kept ? 1 : 0, bestStreak: 1, history: [], checkedInToday: kept,
-                              missedYesterday: false)
+                              streak: kept && !overruled ? 1 : 0, bestStreak: 1, history: [], checkedInToday: kept,
+                              missedYesterday: false, excusedToday: excused, todayOverruled: overruled)
     }
 
     private func summary(_ viewer: MemberStanding?, finished: Bool = false) -> GroupSummary {
@@ -49,6 +49,30 @@ final class VowStatusTests: XCTestCase {
         let group: GroupInfo = makeGroup("a", name: "A")
         XCTAssertEqual(Overview.status(summary(me(kept: true)), group: group, now: afternoon, holdingLight: false), .kept)
         XCTAssertEqual(Overview.status(summary(me(kept: true)), group: group, now: afternoon, holdingLight: true), .open)
+    }
+
+    func testExcusedAndOverruled() {
+        let group: GroupInfo = makeGroup("a", name: "A")
+        func status(_ viewer: MemberStanding, holdingLight: Bool = false) -> VowStatus {
+            return Overview.status(summary(viewer), group: group, now: evening, holdingLight: holdingLight)
+        }
+        XCTAssertEqual(status(me(kept: false, excused: true)), .excused)
+        XCTAssertEqual(status(me(kept: false, excused: true, overruled: true)), .overruled)
+        XCTAssertEqual(status(me(kept: true, overruled: true)), .overruled)
+        // A check-in whose light is still held reads as your turn, whatever the votes.
+        XCTAssertEqual(status(me(kept: true, overruled: true), holdingLight: true), .atRisk)
+        XCTAssertEqual(Overview.status(summary(me(kept: false, excused: true), finished: true), group: group, now: evening,
+                                       holdingLight: false), .finished)
+    }
+
+    func testMenuDotSkipsExcusedAndOverruledVows() {
+        let groups: [GroupInfo] = [makeGroup("a", name: "Sick Day"), makeGroup("b", name: "Voted Down"),
+                                   makeGroup("c", name: "Gym")]
+        var all: [GroupID: GroupSummary] = [:]
+        all[groups[0].id] = summary(me(kept: false, excused: true))
+        all[groups[1].id] = summary(me(kept: true, overruled: true))
+        all[groups[2].id] = summary(me(kept: false))
+        XCTAssertEqual(Overview.menuDot(all, groups: groups, selected: nil, now: evening), MenuDot(names: ["Gym"], atRisk: true))
     }
 
     func testAtRiskOnlyInTheLastFourHours() {

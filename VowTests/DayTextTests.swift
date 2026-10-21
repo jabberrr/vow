@@ -74,4 +74,21 @@ final class DayTextTests: XCTestCase {
         XCTAssertEqual(DayText.count(1), "1 day")
         XCTAssertEqual(DayText.count(30), "30 days")
     }
+
+    func testTimeFollowsTheGroupsTimeZone() {
+        // 2026-10-08 20:14 UTC is Oct 9, 05:14 in Tokyo.
+        let evening: Date = oct8.addingTimeInterval(8 * 3600 + 14 * 60)
+        XCTAssertEqual(plain(DayText.time(evening, timeZoneID: "UTC", locale: en)), "8:14 PM")
+        XCTAssertEqual(plain(DayText.time(evening, timeZoneID: "Asia/Tokyo", locale: en)), "5:14 AM")
+    }
+
+    func testTimeFollowsTheLocalesClock() {
+        let evening: Date = oct8.addingTimeInterval(8 * 3600 + 14 * 60)
+        XCTAssertEqual(DayText.time(evening, timeZoneID: "UTC", locale: Locale(identifier: "en_GB")), "20:14")
+    }
+
+    /// Newer CLDR data puts a narrow no-break space before AM and PM.
+    private func plain(_ text: String) -> String {
+        return text.replacingOccurrences(of: "\u{202F}", with: " ").replacingOccurrences(of: "\u{00A0}", with: " ")
+    }
 }

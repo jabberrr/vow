@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Activity tab: every ledger line by day, newest first, ranked within each day. Until a day has
-/// settled it opens with when days close. No title of its own (the tab says it). Reads the store live,
-/// on a per-minute clock so "Today" and "Yesterday" move on at midnight.
+/// settled it opens with when days close. While the group can still vote on yesterday, its heading says
+/// so: its lines can still change. No title of its own (the tab says it). Reads the store live, on a
+/// per-minute clock so "Today" and "Yesterday" move on at midnight.
 struct ActivityPage: View {
     let id: GroupID
     /// Bumped when the selected tab is tapped again: scroll to the top.
@@ -41,9 +42,10 @@ struct ActivityPage: View {
         let titleDay: Int = ActivityPage.titleDay(group: group, summary: summary, now: now)
         let days: [ActivityDay] = LedgerFormat.days(summary.ledger, group: group, currentDay: titleDay)
         let waiting: Bool = !summary.isFinished && !ActivityPage.hasSettledDay(summary)
+        let voting: Int? = ActivityPage.votingDay(group: group, summary: summary, now: now)
         return ScrollViewReader { (proxy: ScrollViewProxy) in
             ScrollView(.vertical, showsIndicators: false) {
-                column(group: group, days: days, waiting: waiting)
+                column(group: group, days: days, waiting: waiting, votingDay: voting)
             }
             .refreshable {
                 await store.refreshAll()
@@ -57,13 +59,14 @@ struct ActivityPage: View {
     }
 
     /// `waiting`: no day has settled yet; the empty card comes first and today's joins follow it.
-    private func column(group: GroupInfo, days: [ActivityDay], waiting: Bool) -> some View {
+    /// `votingDay`: the settled day the group can still vote on.
+    private func column(group: GroupInfo, days: [ActivityDay], waiting: Bool, votingDay: Int?) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             if waiting {
                 emptyCard(group)
             }
             ForEach(days) { (day: ActivityDay) in
-                daySection(day)
+                daySection(day, votesOpen: day.day == votingDay)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,13 +76,9 @@ struct ActivityPage: View {
         .id(ActivityPage.topID)
     }
 
-    private func daySection(_ day: ActivityDay) -> some View {
+    private func daySection(_ day: ActivityDay, votesOpen: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(day.title)
-                .font(Fonts.subheadlineSemibold)
-                .foregroundStyle(Ink.text2)
-                .padding(.horizontal, Gap.xs)
-                .accessibilityAddTraits(.isHeader)
+            dayHeader(day, votesOpen: votesOpen)
             VStack(spacing: 0) {
                 ForEach(day.lines) { (line: LedgerLine) in
                     LedgerRow(line: line)
@@ -89,6 +88,26 @@ struct ActivityPage: View {
             .frame(maxWidth: .infinity)
             .cardSurface()
         }
+    }
+
+    /// "Yesterday", with "Votes still open" trailing while its numbers can still change. One VoiceOver
+    /// header: "Yesterday, votes still open".
+    private func dayHeader(_ day: ActivityDay, votesOpen: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Gap.s) {
+            Text(day.title)
+                .font(Fonts.subheadlineSemibold)
+                .foregroundStyle(Ink.text2)
+            if votesOpen {
+                Spacer(minLength: Gap.s)
+                Text("Votes still open")
+                    .font(Fonts.footnote)
+                    .foregroundStyle(Ink.text3)
+            }
+        }
+        .padding(.horizontal, Gap.xs)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(votesOpen ? day.title + ", votes still open" : day.title)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func emptyCard(_ group: GroupInfo) -> some View {
@@ -123,6 +142,15 @@ struct ActivityPage: View {
         // Never behind the summary (the timeline's minute can trail the store's clock at midnight).
         let clockDay: Int = max(summary.currentDay, DayClock.currentDay(group, now: now))
         return group.isTest ? max(clockDay, summary.currentDay + 1) : clockDay
+    }
+
+    /// Yesterday while the group can still vote on it (until tonight ends), in a group with someone to vote:
+    /// the only settled day whose lines can still change. A finished vow's final day takes votes through
+    /// the day after it.
+    private static func votingDay(group: GroupInfo, summary: GroupSummary, now: Date) -> Int? {
+        let day: Int = summary.currentDay - 1
+        guard summary.standings.count >= 2, day >= 0, Review.isOpen(day: day, group: group, now: now) else { return nil }
+        return day
     }
 
     /// Some line belongs to a day before today (today's joins don't count).

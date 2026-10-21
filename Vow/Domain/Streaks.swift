@@ -39,15 +39,19 @@ enum StreakEvent: Equatable {
 
 enum StreakEvents {
     /// Longest run of kept days that ended in a miss (the run still going at the end is excluded).
+    /// Excused days neither break nor extend a run.
     static func previousRecord(_ history: [DayOutcome]) -> Int {
         var best: Int = 0
         var run: Int = 0
         for outcome in history {
-            if outcome == .kept {
+            switch outcome {
+            case .kept:
                 run += 1
-            } else {
+            case .missed:
                 best = max(best, run)
                 run = 0
+            case .excused:
+                break
             }
         }
         return best

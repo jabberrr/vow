@@ -54,4 +54,18 @@ enum DayClock {
         guard let shifted: Date = cal.date(byAdding: .day, value: day, to: first) else { return nil }
         return cal.startOfDay(for: shifted)
     }
+
+    /// A server time lands in `days` (group days), or less than `graceSeconds` into the day after the
+    /// last of them: 00:09:59 does, 00:10:00 doesn't. A check-in uses its own day; a vote on day d
+    /// anything from day 0 through d + 1.
+    static func lands(_ date: Date, in days: ClosedRange<Int>, group: GroupInfo) -> Bool {
+        let landed: Int = dayIndex(of: date, start: group.createdAt, timeZoneID: group.timeZoneID)
+        if days.contains(landed) {
+            return true
+        }
+        // Subtracting from the clock's day can't overflow, whatever day a record claims.
+        guard landed - 1 == days.upperBound,
+              let boundary: Date = start(ofDay: landed, group: group) else { return false }
+        return date < boundary.addingTimeInterval(graceSeconds)
+    }
 }

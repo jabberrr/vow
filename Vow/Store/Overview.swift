@@ -59,6 +59,10 @@ enum VowStatus: Equatable {
     /// Your turn, in the last 4 h of a real group's day (`DayWindow.atRiskSeconds`).
     case atRisk
     case kept
+    /// You sent an excuse today and it stands: the day sits out.
+    case excused
+    /// Your check-in or excuse today is overruled by the votes so far.
+    case overruled
     /// You are not a member yet (joined by link without a vow).
     case notJoined
     /// The final day has passed.
@@ -88,7 +92,10 @@ extension Overview {
         }
         guard let viewer: MemberStanding = summary.viewer else { return .notJoined }
         if viewer.checkedInToday && !holdingLight {
-            return .kept
+            return viewer.todayOverruled ? .overruled : .kept
+        }
+        if viewer.excusedToday {
+            return viewer.todayOverruled ? .overruled : .excused
         }
         return DayWindow.isAtRisk(group, now: now) ? .atRisk : .open
     }

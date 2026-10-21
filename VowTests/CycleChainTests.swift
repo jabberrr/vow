@@ -4,6 +4,7 @@ import XCTest
 final class CycleChainTests: XCTestCase {
     private let k: DayOutcome = .kept
     private let m: DayOutcome = .missed
+    private let e: DayOutcome = .excused
 
     func testFirstCycle() {
         let beads: [ChainBead] = CycleChain.beads(history: [k, k, m, k, k], currentDay: 5, checkedInToday: false)
@@ -32,6 +33,14 @@ final class CycleChainTests: XCTestCase {
         let beads: [ChainBead] = CycleChain.beads(history: [], currentDay: 0, checkedInToday: false)
         XCTAssertEqual(beads[0], .today(day: 0, kept: false))
         XCTAssertEqual(beads[1], .upcoming)
+    }
+
+    func testExcusedDaysGetTheirOwnBead() {
+        let beads: [ChainBead] = CycleChain.beads(history: [k, e, m], currentDay: 3, checkedInToday: false)
+        XCTAssertEqual(beads[0], .kept(day: 0))
+        XCTAssertEqual(beads[1], .excused(day: 1))
+        XCTAssertEqual(beads[2], .missed(day: 2))
+        XCTAssertEqual(CycleChain.summaryText(beads), "This cycle: 1 kept, 1 missed, 1 excused, today open")
     }
 
     func testSummaryText() {

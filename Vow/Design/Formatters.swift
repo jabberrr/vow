@@ -145,6 +145,30 @@ enum MilestoneText {
     }
 }
 
+/// The group's vote rule in words: Group's row and sheet, and Chat's preamble.
+enum VoteRuleText {
+    /// "More than half", "Two thirds", "Everyone".
+    static func title(_ rule: VoteRule) -> String {
+        switch rule {
+        case .majority: return "More than half"
+        case .twoThirds: return "Two thirds"
+        case .everyone: return "Everyone"
+        }
+    }
+
+    /// "Check-ins and excuses count unless more than half of the others say they don't, by the end of the
+    /// next day." "Everyone" reads "unless everyone else says they don't".
+    static func summary(_ rule: VoteRule) -> String {
+        let who: String
+        switch rule {
+        case .majority: who = "more than half of the others say"
+        case .twoThirds: who = "two thirds of the others say"
+        case .everyone: who = "everyone else says"
+        }
+        return "Check-ins and excuses count unless \(who) they don't, by the end of the next day."
+    }
+}
+
 /// Dates as the group lives them (its time zone), in the device's language.
 enum DayText {
     /// "Oct 8"; "Oct 8, 2025" when the date is not in `now`'s year.
@@ -190,14 +214,26 @@ enum DayText {
         return n == 1 ? "1 day" : "\(n) days"
     }
 
+    /// "8:14 PM" in the group's time zone: the locale's short time style, so a 24-hour setting reads "20:14".
+    static func time(_ date: Date, timeZoneID: String, locale: Locale = Locale.current) -> String {
+        let timeFormatter: DateFormatter = base(calendar: DayClock.calendar(timeZoneID), locale: locale)
+        timeFormatter.timeStyle = .short
+        return timeFormatter.string(from: date)
+    }
+
+    private static func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+        let formatter: DateFormatter = base(calendar: calendar, locale: locale)
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
+    }
+
     /// Locale first: setting it can reset the formatter's calendar to the locale's own, so the group's
     /// Gregorian calendar and time zone go on after it.
-    private static func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+    private static func base(calendar: Calendar, locale: Locale) -> DateFormatter {
         let formatter: DateFormatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate(template)
         return formatter
     }
 }

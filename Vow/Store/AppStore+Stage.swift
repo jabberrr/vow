@@ -39,14 +39,16 @@ extension AppStore {
         return best
     }
 
-    /// Real, unfinished groups where you are an active member with a vow, in store order.
+    /// Real, unfinished groups where you are an active member with a vow, in store order. An excuse counts
+    /// as kept here: either way there is nothing left to do today.
     func reminderGroups(_ all: [GroupID: GroupSummary]) -> [ReminderGroup] {
         var out: [ReminderGroup] = []
         for id in groupIDs {
             guard let snapshot: GroupSnapshot = snapshots[id], !snapshot.group.isTest,
                   let summary: GroupSummary = all[id], !summary.isFinished,
                   let viewer: MemberStanding = summary.viewer, !viewer.vow.isEmpty else { continue }
-            out.append(ReminderGroup(id: id, name: snapshot.group.name, keptToday: viewer.checkedInToday, streak: viewer.streak,
+            let done: Bool = viewer.checkedInToday || viewer.excusedToday
+            out.append(ReminderGroup(id: id, name: snapshot.group.name, keptToday: done, streak: viewer.streak,
                                      endsAt: EndDate.endsAt(snapshot.group)))
         }
         return out

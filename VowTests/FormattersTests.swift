@@ -22,4 +22,16 @@ final class FormattersTests: XCTestCase {
         XCTAssertEqual(MilestoneText.announcement(streak: 7, event: .milestone(7)), "Checked in. 7-day streak. One week.")
         XCTAssertEqual(MilestoneText.announcement(streak: 1, event: nil), "Checked in. 1-day streak.")
     }
+
+    func testVoteRuleText() {
+        XCTAssertEqual(VoteRuleText.title(.majority), "More than half")
+        XCTAssertEqual(VoteRuleText.title(.twoThirds), "Two thirds")
+        XCTAssertEqual(VoteRuleText.title(.everyone), "Everyone")
+        let tail: String = " they don't, by the end of the next day."
+        XCTAssertEqual(VoteRuleText.summary(.majority),
+                       "Check-ins and excuses count unless more than half of the others say" + tail)
+        XCTAssertEqual(VoteRuleText.summary(.twoThirds),
+                       "Check-ins and excuses count unless two thirds of the others say" + tail)
+        XCTAssertEqual(VoteRuleText.summary(.everyone), "Check-ins and excuses count unless everyone else says" + tail)
+    }
 }

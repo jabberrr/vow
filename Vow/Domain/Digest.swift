@@ -12,30 +12,33 @@ enum Digest {
         return total
     }
 
-    /// You are an active member, the vow isn't finished, and you haven't checked in today.
+    /// You are an active member, the vow isn't finished, and you have neither checked in nor sent an
+    /// excuse today (either closes the orb, whatever the votes say).
     static func isOpen(_ summary: GroupSummary) -> Bool {
         if summary.isFinished {
             return false
         }
         guard let viewer: MemberStanding = summary.viewer else { return false }
-        return !viewer.checkedInToday
+        return !viewer.checkedInToday && !viewer.excusedToday
     }
 
-    static func keptCount(_ standings: [MemberStanding]) -> Int {
-        var n: Int = 0
-        for s in standings where s.checkedInToday {
-            n += 1
-        }
-        return n
-    }
-
-    /// Closed days kept in the current epoch, plus today once checked in.
+    /// Closed days kept in the current epoch, plus today once a check-in stands.
     static func daysKept(_ standing: MemberStanding) -> Int {
-        var n: Int = standing.checkedInToday ? 1 : 0
+        var n: Int = checkInStands(standing) ? 1 : 0
         for outcome in standing.history where outcome == .kept {
             n += 1
         }
         return n
+    }
+
+    /// Checked in today, and the votes so far haven't overruled it.
+    static func checkInStands(_ standing: MemberStanding) -> Bool {
+        return standing.checkedInToday && !standing.todayOverruled
+    }
+
+    /// Sent an excuse today, and the votes so far haven't overruled it: the day sits out.
+    static func excuseStands(_ standing: MemberStanding) -> Bool {
+        return standing.excusedToday && !standing.todayOverruled
     }
 }
 

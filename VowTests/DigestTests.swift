@@ -6,9 +6,11 @@ final class DigestTests: XCTestCase {
         return LedgerLine(id: id, day: day, kind: kind, text: "", amount: amount)
     }
 
-    private func standing(_ id: String, _ name: String, net: Double, history: [DayOutcome] = [], today: Bool = false) -> MemberStanding {
+    private func standing(_ id: String, _ name: String, net: Double, history: [DayOutcome] = [], today: Bool = false,
+                          excused: Bool = false, overruled: Bool = false) -> MemberStanding {
         return MemberStanding(userID: id, displayName: name, vow: "I will read", isActive: true, net: net,
-                              streak: 0, bestStreak: 0, history: history, checkedInToday: today, missedYesterday: false)
+                              streak: 0, bestStreak: 0, history: history, checkedInToday: today, missedYesterday: false,
+                              excusedToday: excused, todayOverruled: overruled)
     }
 
     func testViewerChangeSumsOnlyThatDaysOwnAmounts() {
@@ -27,6 +29,49 @@ final class DigestTests: XCTestCase {
     func testDaysKeptCountsToday() {
         XCTAssertEqual(Digest.daysKept(standing("1", "A", net: 0, history: [.kept, .missed, .kept], today: true)), 3)
         XCTAssertEqual(Digest.daysKept(standing("1", "A", net: 0, history: [.missed], today: false)), 0)
+    }
+
+    func testOnlyStandingCheckInsCountAsKept() {
+        let standings: [MemberStanding] = [
+            standing("1", "A", net: 0, today: true),
+            standing("2", "B", net: 0, today: true, overruled: true),
+            standing("3", "C", net: 0, excused: true),
+            standing("4", "D", net: 0)
+        ]
+        XCTAssertTrue(Digest.checkInStands(standings[0]))
+        XCTAssertFalse(Digest.checkInStands(standings[1]))
+        XCTAssertFalse(Digest.checkInStands(standings[2]))
+
+        let history: [DayOutcome] = [.kept, .excused, .missed, .kept]
+        XCTAssertEqual(Digest.daysKept(standing("1", "A", net: 0, history: history, today: true)), 3)
+        XCTAssertEqual(Digest.daysKept(standing("1", "A", net: 0, history: history, today: true, overruled: true)), 2)
+        XCTAssertEqual(Digest.daysKept(standing("1", "A", net: 0, history: history, excused: true)), 2)
+    }
+
+    func testOnlyStandingExcusesSitTodayOut() {
+        let standings: [MemberStanding] = [
+            standing("1", "A", net: 0, excused: true),
+            standing("2", "B", net: 0, excused: true, overruled: true),
+            standing("3", "C", net: 0, today: true),
+            standing("4", "D", net: 0),
+            standing("5", "E", net: 0, excused: true)
+        ]
+        XCTAssertTrue(Digest.excuseStands(standings[0]))
+        XCTAssertFalse(Digest.excuseStands(standings[1]))
+        XCTAssertFalse(Digest.excuseStands(standings[2]))
+        XCTAssertFalse(Digest.excuseStands(standings[3]))
+        XCTAssertTrue(Digest.excuseStands(standings[4]))
+    }
+
+    func testAnExcuseClosesToday() {
+        func open(_ viewer: MemberStanding) -> Bool {
+            return Digest.isOpen(GroupSummary(currentDay: 4, cycle: 1, dayInCycle: 5, glyphNumber: 5, pot: 0,
+                                              totalForfeited: 0, standings: [viewer], ledger: [], viewer: viewer))
+        }
+        XCTAssertTrue(open(standing("me", "Me", net: 0)))
+        XCTAssertFalse(open(standing("me", "Me", net: 0, excused: true)))
+        XCTAssertFalse(open(standing("me", "Me", net: 0, excused: true, overruled: true)))
+        XCTAssertFalse(open(standing("me", "Me", net: 0, today: true, overruled: true)))
     }
 
     func testSpan() {

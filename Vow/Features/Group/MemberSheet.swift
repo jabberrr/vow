@@ -75,14 +75,12 @@ private struct MemberDetails: View {
     }
 
     /// nil once the vow is finished: there is no today to report.
-    private var status: String? {
-        if summary.isFinished {
-            return nil
-        }
-        if member.checkedInToday {
-            return "Kept today"
-        }
-        return isYou ? "Your turn" : "Not yet"
+    private var today: MemberDay? {
+        summary.isFinished ? nil : MemberDay.of(member, isViewer: isYou)
+    }
+
+    private var state: SphereState {
+        today?.sphere ?? .unlit
     }
 
     private var spokenValue: String {
@@ -90,8 +88,8 @@ private struct MemberDetails: View {
         if !vow.isEmpty {
             parts.append(vow)
         }
-        if let today: String = status {
-            parts.append(today)
+        if let day: MemberDay = today {
+            parts.append(day.title)
         }
         return parts.joined(separator: ", ")
     }
@@ -117,9 +115,10 @@ private struct MemberDetails: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 14) {
             Sphere(theme: Overview.theme(summary),
-                   state: member.checkedInToday ? .lit : .unlit,
+                   state: state,
                    size: 56,
                    initial: NameFormat.initial(member.displayName))
+                .animation(Anim.light, value: state)
             nameColumn
             SheetCloseButton(action: onClose)
                 .padding(.trailing, -8)

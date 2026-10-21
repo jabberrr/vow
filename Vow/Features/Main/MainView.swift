@@ -1,12 +1,15 @@
 import SwiftUI
+import UIKit
 
 /// The signed-in app, as a shell: the pinned top bar, the selected group's page for the chosen tab, the
 /// tab bar and the sidebar overlay, which stays mounted and only ever slides or fades. It owns the selection, the
-/// tab, the 60 s refresh, the reminder sync and the `Presenter`, whose one sheet and one confirmation
-/// dialog are the only ones in the main experience: pages and chrome ask for them through closures.
+/// tab, the refresh (every 60 s, every 15 s on Chat), Chat's unsent drafts, the reminder sync and the
+/// `Presenter`, whose one sheet, one full-screen cover and one confirmation dialog are the only ones in the
+/// main experience: pages and chrome ask for them through closures. It ignores the keyboard: Chat lifts its
+/// own composer, and a sheet's keyboard never moves the shell behind it.
 struct MainView: View {
     @Binding var roomDimmed: Bool
-    /// A sheet, a dialog or the sidebar is up: RootView's toast waits briefly, then it is dropped.
+    /// A sheet, a cover, a dialog or the sidebar is up: RootView's toast waits briefly, then it is dropped.
     @Binding var toastBlocked: Bool
     /// The top bar's measured height (its banner included): the toast sits below it.
     @Binding var topBarHeight: CGFloat
@@ -19,8 +22,10 @@ struct MainView: View {
     @State private var presenter: Presenter = Presenter()
     @State private var selected: GroupID? = nil
     @State private var tab: MainTab = .home
-    /// Bumped when the selected tab is tapped again: its page scrolls to the top.
+    /// Bumped when the selected tab is tapped again: its page scrolls to the top (Chat: to the latest).
     @State private var topToken: Int = 0
+    /// Each group's unsent Chat message, kept across tab and group switches while the app runs.
+    @State private var chatDrafts: [GroupID: String] = [:]
     @State private var sidebarOpen: Bool = false
     /// A swipe from the leading edge while the panel follows it. Gesture state, like `closeDrag`: a
     /// cancelled drag (a sheet or an alert taking the touch, the app going inactive) resets itself, so
@@ -59,6 +64,8 @@ struct MainView: View {
     /// Back from the background after this long: an open vow is chosen again.
     private static let reselectAfter: TimeInterval = 600
     private static let refreshNanos: UInt64 = 60_000_000_000
+    /// While Chat is shown: replies and votes arrive while you read.
+    private static let chatRefreshNanos: UInt64 = 15_000_000_000
     /// The strip along the leading edge that opens the sidebar with a swipe.
     private static let edgeWidth: CGFloat = 16
 
@@ -135,13 +142,14 @@ struct MainView: View {
         }
     }
 
-    /// Whenever a group's page is shown: members, not-members and finished vows alike, so the four tabs
-    /// keep their places.
+    /// Whenever a group's page is shown: members, not-members and finished vows alike, so the five tabs
+    /// keep their places. Chat's dot is for the shown group, and never while Chat is the page.
     @ViewBuilder
     private func tabBar(all: [GroupID: GroupSummary], bottomInset: CGFloat) -> some View {
         if let id: GroupID = shownID {
             VowTabBar(selection: tab,
                       streakLit: streakLit(id, all: all),
+                      chatDot: tab != .chat && store.hasUnseenChat(id),
                       dimmed: roomDimmed,
                       bottomInset: bottomInset,
                       onSelect: { (t: MainTab) in selectTab(t) })
@@ -173,6 +181,8 @@ struct MainView: View {
         switch tab {
         case .home:
             StageScreen(id: id, roomDimmed: $roomDimmed, metrics: metrics, topToken: topToken, actions: stageActions(id))
+        case .chat:
+            ChatPage(id: id, topToken: topToken, draft: chatDraft(id), covered: sidebarShown, actions: chatActions(id))
         case .streak:
             StreakPage(id: id, metrics: metrics, topToken: topToken, onJoin: { presenter.present(.vow(id), from: .screen) })
         case .activity:
@@ -282,7 +292,8 @@ struct MainView: View {
 
     /// Every slide first asks the presenter to start nothing for its length, so a sheet asked for from
     /// the sidebar rises only once the panel has gone. Closing works from any shown state, a swipe from
-    /// the edge still under the finger included. Reduce Motion: a fade in place.
+    /// the edge still under the finger included. Opening ends editing, so Chat's keyboard never sits over
+    /// the panel's footer. Reduce Motion: a fade in place.
     private func setSidebar(_ open: Bool) {
         if !open && edgeTravel != nil {
             withAnimation(sidebarAnimation(open: false)) {
@@ -290,6 +301,9 @@ struct MainView: View {
             }
         }
         guard open != sidebarOpen else { return }
+        if open {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
         presenter.delay(for: MainView.sidebarSlide)
         withAnimation(sidebarAnimation(open: open)) {
             sidebarOpen = open
@@ -494,16 +508,19 @@ struct MainView: View {
         roomDimmed || holdingLightID != nil
     }
 
-    /// New group is up: a reminder tap waits until it closes, saving or not. Deliberate: closing it would
-    /// discard what you typed (and cut a save off before its Invite).
-    private var creating: Bool {
-        presenter.sheet == MainSheet.create
+    /// New group, an excuse or proof on its way is up, or about to rise in place of what is up (the proof
+    /// sheet after the camera): a reminder tap waits until it has closed, sent or not. Deliberate: closing
+    /// it would discard what you typed, picked or shot (and cut a save off before its Invite).
+    private var holdsUnsavedWork: Bool {
+        presenter.sheet?.holdsUnsavedWork == true || presenter.queued?.holdsUnsavedWork == true
     }
 
-    /// Lit from the social beat on once you have kept today; never for a finished vow.
+    /// Lit from the social beat on while your check-in today stands (not excused, not overruled); never for
+    /// a finished vow.
     private func streakLit(_ id: GroupID, all: [GroupID: GroupSummary]) -> Bool {
-        guard let summary: GroupSummary = all[id], !summary.isFinished else { return false }
-        return summary.viewer?.checkedInToday == true && holdingLightID != id
+        guard let summary: GroupSummary = all[id], !summary.isFinished,
+              let viewer: MemberStanding = summary.viewer else { return false }
+        return Digest.checkInStands(viewer) && holdingLightID != id
     }
 
     /// Your vows other than `besides` still open today.
@@ -523,7 +540,10 @@ struct MainView: View {
             willLight: { holdingLightID = id },
             didLight: { lightReleased(id) },
             didKeep: { pulseMenuIfNeeded() },
-            offerReminder: { offerReminderIfDue(kept: id) }
+            offerReminder: { offerReminderIfDue(kept: id) },
+            excuse: { presenter.present(.excuse(id), from: .screen) },
+            addProof: { addProof(id) },
+            showChat: { selectTab(.chat) }
         )
     }
 
@@ -533,8 +553,42 @@ struct MainView: View {
             editVow: { presenter.present(.vow(id), from: .screen) },
             showMember: { (userID: String) in presenter.present(.member(id, userID), from: .screen) },
             confirmLeave: { presenter.confirm(.leave(id), from: .screen) },
-            confirmDelete: { presenter.confirm(.delete(id), from: .screen) }
+            confirmDelete: { presenter.confirm(.delete(id), from: .screen) },
+            voteRule: { presenter.present(.voteRule(id), from: .screen) }
         )
+    }
+
+    /// Chat's "+" card lists the camera and the library itself, so it skips Home's proof chooser.
+    private func chatActions(_ id: GroupID) -> ChatActions {
+        return ChatActions(
+            takeProof: { presenter.present(.camera(id), from: .screen) },
+            pickProof: { presenter.present(.library(id), from: .screen) },
+            excuse: { presenter.present(.excuse(id), from: .screen) },
+            openMedia: { (postID: String) in presenter.present(.media(id, postID), from: .screen) },
+            join: { presenter.present(.vow(id), from: .screen) }
+        )
+    }
+
+    /// The group's unsent message; an emptied draft is dropped.
+    private func chatDraft(_ id: GroupID) -> Binding<String> {
+        return Binding<String>(
+            get: { () -> String in
+                return chatDrafts[id] ?? ""
+            },
+            set: { (text: String) -> Void in
+                chatDrafts[id] = text.isEmpty ? nil : text
+            }
+        )
+    }
+
+    /// Home's Add proof: the chooser (camera or library), or the library at once on a device without a
+    /// camera.
+    private func addProof(_ id: GroupID) {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            presenter.present(.library(id), from: .screen)
+            return
+        }
+        presenter.confirm(.proofSource(id), from: .screen)
     }
 
     private func lightReleased(_ id: GroupID) {
@@ -560,12 +614,16 @@ struct MainView: View {
         presenter.present(.reminderOffer, from: .automatic)
     }
 
-    // MARK: - Sheets and dialogs
+    // MARK: - Sheets, covers and dialogs
 
-    /// The only `.sheet` and `.confirmationDialog` in the main experience.
+    /// The only `.sheet`, `.fullScreenCover` and `.confirmationDialog` in the main experience. One slot:
+    /// at most one of them is up.
     private var presentations: some View {
         shell
             .sheet(item: presenter.sheetBinding, onDismiss: { presenter.sheetDismissed() }) { (item: MainSheet) in
+                sheetContent(item)
+            }
+            .fullScreenCover(item: presenter.coverBinding, onDismiss: { presenter.sheetDismissed() }) { (item: MainSheet) in
                 sheetContent(item)
             }
             .confirmationDialog(dialogTitle,
@@ -574,11 +632,14 @@ struct MainView: View {
                                 presenting: presenter.dialog) { (d: MainDialog) in
                 dialogActions(d)
             } message: { (d: MainDialog) in
-                Text(dialogMessage(d))
+                if let text: String = dialogMessage(d) {
+                    Text(text)
+                }
             }
     }
 
-    /// The content's appearance is the presenter's proof that a presentation really happened.
+    /// The content's appearance is the presenter's proof that a presentation really happened, for a cover
+    /// as for a sheet.
     private func sheetContent(_ item: MainSheet) -> some View {
         sheetBody(item)
             .environment(store)
@@ -592,6 +653,7 @@ struct MainView: View {
     }
 
     /// Every case is a real view: an `EmptyView` body never appears, so the presenter would clear it.
+    /// Covers (`isCover`) fill the screen and take no detents.
     @ViewBuilder
     private func sheetBody(_ item: MainSheet) -> some View {
         switch item {
@@ -619,6 +681,23 @@ struct MainView: View {
         case .reminderOffer:
             ReminderOfferSheet()
                 .vowSheet([.height(380), .large])
+        case .excuse(let id):
+            ExcuseSheet(id: id)
+                .vowSheet([.medium, .large])
+        case .camera(let id):
+            CameraPicker(onPicked: { (draft: MediaDraft) in proofPicked(draft, in: id) },
+                         onLibrary: { presenter.present(.library(id), from: .sheet) })
+        case .library(let id):
+            LibraryPicker(onPicked: { (draft: MediaDraft) in proofPicked(draft, in: id) })
+                .vowSheet([.large])
+        case .proof(let id, let draft):
+            ProofSheet(id: id, draft: draft)
+                .vowSheet([.large])
+        case .media(let id, let postID):
+            MediaViewer(id: id, postID: postID)
+        case .voteRule(let id):
+            VoteRuleSheet(id: id)
+                .vowSheet([.medium, .large])
         }
     }
 
@@ -626,6 +705,11 @@ struct MainView: View {
     private func groupCreated(_ id: GroupID) {
         select(id)
         presenter.present(.invite(id), from: .sheet)
+    }
+
+    /// The camera or the library has a draft ready: it closes, then the proof sheet rises to caption it.
+    private func proofPicked(_ draft: MediaDraft, in id: GroupID) {
+        presenter.present(.proof(id, draft), from: .sheet)
     }
 
     private var dialogTitle: String {
@@ -637,6 +721,8 @@ struct MainView: View {
             return "Delete \(groupName(id))?"
         case .resetTest:
             return "Reset this test group?"
+        case .proofSource:
+            return "Add proof"
         }
     }
 
@@ -655,11 +741,19 @@ struct MainView: View {
             Button("Reset group", role: .destructive) {
                 Task { await store.resetTestGroup(id) }
             }
+        case .proofSource(let id):
+            Button("Take photo or video") {
+                presenter.present(.camera(id), from: .sheet)
+            }
+            Button("Choose from library") {
+                presenter.present(.library(id), from: .sheet)
+            }
         }
         Button("Cancel", role: .cancel) {}
     }
 
-    private func dialogMessage(_ d: MainDialog) -> String {
+    /// nil: the dialog has no message (the proof chooser's title says it all).
+    private func dialogMessage(_ d: MainDialog) -> String? {
         switch d {
         case .leave:
             return "You stop staking from today. Your past days stay in the group's activity."
@@ -667,6 +761,8 @@ struct MainView: View {
             return "This deletes the group and its history for everyone. You can't undo it."
         case .resetTest:
             return "Everyone starts over from day 1. Check-ins, streaks and points are cleared."
+        case .proofSource:
+            return nil
         }
     }
 
@@ -687,7 +783,8 @@ struct MainView: View {
                 return !EndDate.isFinished(group, now: Date())
             case .reminderOffer:
                 return reminders.shouldOffer && window.isOpen
-            case .create, .join, .invite, .member, .settings, .profile:
+            case .create, .join, .invite, .member, .settings, .profile, .excuse, .camera, .library, .proof, .media,
+                 .voteRule:
                 return true
             }
         }
@@ -713,8 +810,8 @@ struct MainView: View {
             .onChange(of: scenePhase) { (_: ScenePhase, phase: ScenePhase) in
                 scenePhaseChanged(phase)
             }
-            .task(id: shownID) {
-                await refreshLoop(shownID)
+            .task(id: refreshKey) {
+                await refreshLoop(refreshKey)
             }
     }
 
@@ -742,8 +839,8 @@ struct MainView: View {
                     syncReminders(force: false)
                 }
             }
-            .onChange(of: creating) { (_: Bool, open: Bool) in
-                if !open {
+            .onChange(of: holdsUnsavedWork) { (_: Bool, holds: Bool) in
+                if !holds {
                     handleOpenRequest()
                 }
             }
@@ -803,11 +900,18 @@ struct MainView: View {
         }
     }
 
-    /// The shown group, every 60 s, on every tab. A group that has gone is never polled.
-    private func refreshLoop(_ id: GroupID?) async {
-        guard let target: GroupID = id else { return }
+    /// A new group, or Chat shown or left, restarts the loop at its own pace.
+    private var refreshKey: RefreshKey {
+        RefreshKey(id: shownID, isChat: tab == .chat)
+    }
+
+    /// The shown group, every 60 s on every tab but Chat, where it is every 15 s. A group that has gone is
+    /// never polled.
+    private func refreshLoop(_ key: RefreshKey) async {
+        guard let target: GroupID = key.id else { return }
+        let pause: UInt64 = key.isChat ? MainView.chatRefreshNanos : MainView.refreshNanos
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: MainView.refreshNanos)
+            try? await Task.sleep(nanoseconds: pause)
             if Task.isCancelled || store.snapshots[target] == nil { break }
             await store.refresh(target)
         }
@@ -852,7 +956,7 @@ struct MainView: View {
 
     /// A reminder tap: everything closes, then that vow's Home. Kept until the group exists (a cold
     /// launch comes before the first sync) and dropped once a sync finished without it. Waits while Home
-    /// is busy and while New group is up, so a save is never cut off.
+    /// is busy and while unsaved work is up, so nothing you wrote, picked or shot is thrown away.
     private func handleOpenRequest() {
         guard let id: GroupID = reminders.openRequest else { return }
         guard store.snapshots[id] != nil else {
@@ -861,7 +965,7 @@ struct MainView: View {
             }
             return
         }
-        guard !stageBusy, !creating else { return }
+        guard !stageBusy, !holdsUnsavedWork else { return }
         reminders.openRequest = nil
         presenter.dismissAll()
         setSidebar(false)
@@ -922,6 +1026,12 @@ private final class OfferWindow {
         guard let start: TimeInterval = openedAt else { return false }
         return ProcessInfo.processInfo.systemUptime - start < OfferWindow.length
     }
+}
+
+/// What the refresh loop runs for: the shown group, at Chat's pace or the usual one.
+private struct RefreshKey: Equatable {
+    let id: GroupID?
+    let isChat: Bool
 }
 
 /// How a drag on the sidebar or its edge was classified: horizontal only when clearly wider than tall.

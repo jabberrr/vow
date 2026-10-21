@@ -9,11 +9,13 @@ struct GroupActions {
     let confirmLeave: () -> Void
     /// "Delete group" (the owner, who can't leave): the shell asks first.
     let confirmDelete: () -> Void
+    /// The voting rule's sheet: the owner's, while the vow runs.
+    let voteRule: () -> Void
 }
 
 /// The Group tab: who is in the group (today's status, streak and net, Invite last), the group's points
-/// and last day, your vow, then leave or delete. No test controls: they stay on Home's test bar, next
-/// to the orb. Reads the store live on a per-minute clock, so your ring turns flame on time.
+/// and last day, the voting rule, your vow, then leave or delete. No test controls: they stay on Home's
+/// test bar, next to the orb. Reads the store live on a per-minute clock, so your ring turns flame on time.
 struct GroupPage: View {
     let id: GroupID
     /// Bumped when the selected tab is tapped again: scroll to the top.
@@ -76,6 +78,7 @@ struct GroupPage: View {
                              onSelect: actions.showMember,
                              onInvite: actions.invite)
             factsCard(GroupPage.facts(group: group, summary: summary, now: now))
+            votingSection(group: group, summary: summary)
             if !summary.isFinished {
                 GroupActionRow(title: isMember ? "Edit vow" : "Write your vow",
                                systemImage: "pencil",
@@ -130,6 +133,40 @@ struct GroupPage: View {
                                  tint: Ink.text2))
         }
         return out
+    }
+
+    // MARK: - Voting
+
+    /// The rule a check-in or excuse is judged by, and tomorrow's when the owner has changed it. Only the
+    /// owner changes it, and only while the vow runs; everyone else reads it.
+    private func votingSection(group: GroupInfo, summary: GroupSummary) -> some View {
+        let isOwner: Bool = store.isOwner(id)
+        // A finished vow's last rule is its final day's: the one its last votes are counted by.
+        let day: Int = summary.isFinished ? summary.currentDay - 1 : summary.currentDay
+        let today: VoteRule = Review.rule(forDay: day, group: group)
+        let tomorrow: VoteRule = Review.rule(forDay: day + 1, group: group)
+        return VStack(alignment: .leading, spacing: 0) {
+            VoteRuleRow(today: today,
+                        tomorrow: (summary.isFinished || tomorrow == today) ? nil : tomorrow,
+                        action: (isOwner && !summary.isFinished) ? actions.voteRule : nil)
+                .frame(maxWidth: .infinity)
+                .cardSurface()
+            FieldFooter(GroupPage.votingFooter(isSolo: summary.standings.count < 2,
+                                               isOwner: isOwner,
+                                               isFinished: summary.isFinished))
+        }
+    }
+
+    /// Who the rule counts ("the others", or "them" once others join), then who can change it. A finished
+    /// vow's rule can't change, so it stops after the first sentence.
+    private static func votingFooter(isSolo: Bool, isOwner: Bool, isFinished: Bool) -> String {
+        let rule: String = isSolo
+            ? "Once others join, check-ins and excuses count unless this many of them say they don't."
+            : "Check-ins and excuses count unless this many of the others say they don't, by the end of the next day."
+        if isFinished {
+            return rule
+        }
+        return rule + (isOwner ? " Changes start tomorrow." : " Only the owner can change it.")
     }
 
     // MARK: - Leave or delete
@@ -194,6 +231,122 @@ private struct GroupFactRow: View {
             .monospacedDigit()
             .foregroundStyle(fact.tint)
             .layoutPriority(1)
+    }
+}
+
+/// "Overrule with … More than half", with "Two thirds from tomorrow" under the title while a change waits.
+/// A button with a chevron for the owner; the same row, read-only, for everyone else. The value stacks
+/// under the title at accessibility sizes.
+private struct VoteRuleRow: View {
+    let today: VoteRule
+    /// Tomorrow's rule, only when it differs from today's.
+    let tomorrow: VoteRule?
+    /// nil: read-only.
+    let action: (() -> Void)?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize: DynamicTypeSize
+
+    init(today: VoteRule, tomorrow: VoteRule?, action: (() -> Void)?) {
+        self.today = today
+        self.tomorrow = tomorrow
+        self.action = action
+    }
+
+    private static let title: String = "Overrule with"
+
+    /// "Two thirds from tomorrow".
+    private var change: String? {
+        guard let next: VoteRule = tomorrow else { return nil }
+        return VoteRuleText.title(next) + " from tomorrow"
+    }
+
+    /// "More than half, Two thirds from tomorrow".
+    private var spokenValue: String {
+        guard let line: String = change else { return VoteRuleText.title(today) }
+        return VoteRuleText.title(today) + ", " + line
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if let tap: () -> Void = action {
+            Button(action: tap) {
+                row
+            }
+            .buttonStyle(RowPressStyle())
+            .accessibilityLabel(VoteRuleRow.title)
+            .accessibilityValue(spokenValue)
+            .accessibilityHint("Changes the rule from tomorrow")
+        } else {
+            row
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(VoteRuleRow.title)
+                .accessibilityValue(spokenValue)
+        }
+    }
+
+    private var row: some View {
+        content
+            .padding(.horizontal, Gap.l)
+            .padding(.vertical, Gap.m)
+            .frame(minHeight: change == nil ? 50 : 64)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            HStack(spacing: Gap.s) {
+                VStack(alignment: .leading, spacing: Gap.xxs) {
+                    titleText
+                    valueText
+                    changeText
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                chevron
+            }
+        } else {
+            HStack(spacing: Gap.s) {
+                VStack(alignment: .leading, spacing: Gap.xxs) {
+                    titleText
+                    changeText
+                }
+                Spacer(minLength: Gap.s)
+                valueText
+                chevron
+            }
+        }
+    }
+
+    private var titleText: some View {
+        Text(VoteRuleRow.title)
+            .font(Fonts.body)
+            .foregroundStyle(Ink.text)
+    }
+
+    private var valueText: some View {
+        Text(VoteRuleText.title(today))
+            .font(Fonts.body)
+            .foregroundStyle(Ink.text2)
+            .layoutPriority(1)
+    }
+
+    @ViewBuilder
+    private var changeText: some View {
+        if let line: String = change {
+            Text(line)
+                .font(Fonts.footnote)
+                .foregroundStyle(Ink.text3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var chevron: some View {
+        if action != nil {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Ink.text3)
+                .accessibilityHidden(true)
+        }
     }
 }
 

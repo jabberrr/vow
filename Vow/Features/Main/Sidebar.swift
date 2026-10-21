@@ -350,8 +350,9 @@ struct AddGroupMenu: View {
     }
 }
 
-/// One group: its status sphere (lit kept, ringed your turn, a flame ring in the last 4 h, unlit when
-/// not joined or finished), its name and your streak. The selected group has the field fill.
+/// One group: its status sphere (lit kept, ringed your turn, a flame ring in the last 4 h, dashed when
+/// excused, unlit when overruled, not joined or finished), its name and your streak. The selected group has
+/// the field fill.
 struct SidebarGroupRow: View {
     let group: GroupInfo
     let summary: GroupSummary
@@ -425,23 +426,29 @@ struct SidebarGroupRow: View {
             .multilineTextAlignment(.leading)
     }
 
-    /// Your streak while it counts (a grey 0 beside a ring that already says "your turn" is noise);
-    /// "Finished" for an ended vow; nothing when not joined.
+    /// Your streak while it counts (a grey 0 beside a ring that already says "your turn" is noise), also
+    /// while an excuse pauses it; "Overruled" or "Finished" in words; nothing when not joined.
     @ViewBuilder
     private var trailing: some View {
         switch status {
+        case .overruled:
+            note("Overruled")
         case .finished:
-            Text("Finished")
-                .font(Fonts.footnote)
-                .foregroundStyle(Ink.text3)
-                .lineLimit(1)
-        case .open, .atRisk, .kept:
+            note("Finished")
+        case .open, .atRisk, .kept, .excused:
             if streak > 0 {
                 FlameStreak(count: streak, size: .small)
             }
         case .notJoined:
             EmptyView()
         }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(Fonts.footnote)
+            .foregroundStyle(Ink.text3)
+            .lineLimit(1)
     }
 
     private var streak: Int {
@@ -452,21 +459,24 @@ struct SidebarGroupRow: View {
         switch status {
         case .kept: return .lit
         case .open, .atRisk: return .open
-        case .notJoined, .finished: return .unlit
+        case .excused: return .excused
+        case .overruled, .notJoined, .finished: return .unlit
         }
     }
 
-    /// "Test, Your turn, under 4 hours left, 12-day streak".
+    /// "Test, Your turn, under 4 hours left, 12-day streak"; "Excused today, 12-day streak".
     private var spokenValue: String {
         var text: String = group.isTest ? "Test, " : ""
         switch status {
         case .open: text += "Your turn"
         case .atRisk: text += "Your turn, under 4 hours left"
         case .kept: text += "Kept today"
+        case .excused: text += "Excused today"
+        case .overruled: text += "Overruled"
         case .notJoined: text += "Not joined"
         case .finished: text += "Finished"
         }
-        let counts: Bool = status == .open || status == .atRisk || status == .kept
+        let counts: Bool = status == .open || status == .atRisk || status == .kept || status == .excused
         if counts && streak > 0 {
             text += streak == 1 ? ", 1-day streak" : ", \(streak)-day streak"
         }

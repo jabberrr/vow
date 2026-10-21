@@ -28,6 +28,10 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Vow uses the camera so you can take a photo or video to show your group you kept your vow.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vow records sound with the videos you take for your group.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

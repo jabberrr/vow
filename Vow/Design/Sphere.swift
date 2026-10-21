@@ -5,8 +5,10 @@ enum SphereState: Equatable {
     case lit
     /// Your turn: unlit with an outer ring.
     case open
-    /// Not yet / not a member.
+    /// Not yet / not a member; also a claim the group has overruled.
     case unlit
+    /// Excused: the day sits out. Unlit, with a dashed ring.
+    case excused
 }
 
 /// The app's one status shape, drawn with the orb's light model. Decorative (hidden from VoiceOver);
@@ -124,15 +126,35 @@ struct Sphere: View {
         }
     }
 
-    /// Outer ring for .open, drawn in .overlay so it never changes layout.
+    /// Outer ring: solid in `ringColor` for .open, dashed in `Ink.text3` for .excused. Drawn in .overlay so
+    /// it never changes layout.
     @ViewBuilder
     private var ring: some View {
-        if state == .open {
+        switch state {
+        case .open:
             Circle()
                 .strokeBorder(ringColor, lineWidth: size < 30 ? 1.5 : 1.75)
-                .frame(width: size + (size < 30 ? 5 : 6), height: size + (size < 30 ? 5 : 6))
+                .frame(width: ringSize, height: ringSize)
                 .allowsHitTesting(false)
+        case .excused:
+            Circle()
+                .strokeBorder(Ink.text3, style: dashes)
+                .frame(width: ringSize, height: ringSize)
+                .allowsHitTesting(false)
+        case .lit, .unlit:
+            EmptyView()
         }
+    }
+
+    private var ringSize: CGFloat {
+        size + (size < 30 ? 5 : 6)
+    }
+
+    /// The excused ring: as fine as the open ring on small spheres, longer dashes on Home's big one.
+    private var dashes: StrokeStyle {
+        let width: CGFloat = size < 30 ? 1.5 : (size >= 100 ? 2 : 1.75)
+        let dash: [CGFloat] = size >= 100 ? [6, 6] : [3, 3]
+        return StrokeStyle(lineWidth: width, dash: dash)
     }
 
     private func initialText(_ letter: String) -> some View {

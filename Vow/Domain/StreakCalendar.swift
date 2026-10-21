@@ -4,12 +4,18 @@ import Foundation
 enum CalendarDayState: Equatable {
     /// A closed vow day you kept.
     case kept
-    /// A closed vow day you missed.
+    /// A closed vow day you missed (an overruled check-in or excuse included).
     case missed
+    /// A closed vow day you sat out on an excuse that stood. It breaks the highlight, not the streak.
+    case excused
     /// Today, not kept yet.
     case todayOpen
-    /// Today, kept.
+    /// Today, kept: your check-in stands.
     case todayKept
+    /// Today, sat out: your excuse stands.
+    case todayExcused
+    /// Today, your check-in or excuse is overruled by the votes so far.
+    case todayOverruled
     /// A vow day still to come: up to the final day, or for good without an end.
     case upcoming
     /// Not one of your vow days: before the group began or you joined, or after the final day.
@@ -18,6 +24,16 @@ enum CalendarDayState: Equatable {
     /// Kept, today included: these days share the streak's highlight.
     var isKept: Bool {
         self == .kept || self == .todayKept
+    }
+
+    /// Today, whatever has happened to it.
+    var isToday: Bool {
+        switch self {
+        case .todayOpen, .todayKept, .todayExcused, .todayOverruled:
+            return true
+        case .kept, .missed, .excused, .upcoming, .outside:
+            return false
+        }
     }
 }
 
@@ -74,7 +90,7 @@ struct CalendarSpan {
     /// Your first vow day: `history[i]` is group day `firstDay + i` (your closed days, contiguous).
     private let firstDay: Int
     private let history: [DayOutcome]
-    private let checkedInToday: Bool
+    private let todayState: CalendarDayState
 
     /// Only `calendar.firstWeekday` is read from `calendar`: dates always follow the group's day clock
     /// (`DayClock.calendar(group.timeZoneID)`). `now` places the current month, because a finished
@@ -107,7 +123,7 @@ struct CalendarSpan {
         self.endDay = group.endDay
         self.firstDay = today - standing.history.count
         self.history = standing.history
-        self.checkedInToday = standing.checkedInToday
+        self.todayState = CalendarSpan.state(of: standing)
     }
 
     /// Month `index` (0 = the month the group began); nil outside 0..<count.
@@ -155,12 +171,26 @@ struct CalendarSpan {
         if day < today {
             let index: Int = day - firstDay
             guard index < history.count else { return .outside }
-            return history[index] == .kept ? .kept : .missed
+            switch history[index] {
+            case .kept: return .kept
+            case .missed: return .missed
+            case .excused: return .excused
+            }
         }
         if day == today {
-            return checkedInToday ? .todayKept : .todayOpen
+            return todayState
         }
         return .upcoming
+    }
+
+    /// Today's: open until you check in or send an excuse, then whichever you did, unless the votes so far
+    /// overrule it.
+    private static func state(of standing: MemberStanding) -> CalendarDayState {
+        guard standing.checkedInToday || standing.excusedToday else { return .todayOpen }
+        if standing.todayOverruled {
+            return .todayOverruled
+        }
+        return standing.checkedInToday ? .todayKept : .todayExcused
     }
 
     /// Months from month 0 to the one holding group day `day`. Counted from year and month numbers, not
@@ -190,13 +220,23 @@ enum StreakCalendar {
     /// Safety cap on a span's months (just over 100 years).
     static let maxMonths: Int = 1_212
 
-    /// Group day index where the current streak began; nil when the streak is 0.
-    /// Last kept day = checkedInToday ? currentDay : currentDay - 1; start = last - streak + 1.
+    /// Group day index where the current streak began: its first kept day, walking back from today over
+    /// kept and excused days to the last miss. nil when the streak is 0.
     static func streakStartDay(summary: GroupSummary, standing: MemberStanding) -> Int? {
         guard standing.streak > 0 else { return nil }
-        let keptToday: Bool = standing.checkedInToday && !summary.isFinished
-        let last: Int = keptToday ? summary.currentDay : summary.currentDay - 1
-        return max(0, last - standing.streak + 1)
+        var start: Int? = Digest.checkInStands(standing) && !summary.isFinished ? summary.currentDay : nil
+        // `history[i]` is group day `firstDay + i`, the last of them yesterday.
+        let firstDay: Int = summary.currentDay - standing.history.count
+        for i in standing.history.indices.reversed() {
+            let outcome: DayOutcome = standing.history[i]
+            if outcome == .missed {
+                break
+            }
+            if outcome == .kept {
+                start = firstDay + i
+            }
+        }
+        return start
     }
 
     /// Start of the current streak's first day in the group's time zone; nil when the streak is 0.

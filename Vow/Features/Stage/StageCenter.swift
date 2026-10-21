@@ -2,12 +2,16 @@ import SwiftUI
 
 /// The member stage in reading order: the vow, the orb, the streak, the caption, then who kept today
 /// with the milestone tag in the reserved gap above them. One VStack, so the orb's zIndex lifts its
-/// burst over every sibling. Nothing here changes height on check-in: the three caption phrasings
-/// share one slot, the tag is an overlay, and only the vow and the orb stay lit during a hold.
+/// burst over every sibling. Nothing here changes height on check-in: the caption's phrasings share one
+/// slot, the tag is an overlay, and only the vow and the orb stay lit during a hold. Excused today, a
+/// still sphere takes the orb's slot and the excuse is quoted in the tag's gap; that swap happens behind
+/// the excuse sheet, never during a check-in.
 struct StageCenter: View {
     let group: GroupInfo
     let summary: GroupSummary
     let viewer: MemberStanding
+    /// Today's excuse while you are excused.
+    let excuse: String?
     let theme: DailyTheme
     let viewerID: String
     let metrics: StageMetrics
@@ -33,6 +37,7 @@ struct StageCenter: View {
     init(group: GroupInfo,
          summary: GroupSummary,
          viewer: MemberStanding,
+         excuse: String?,
          theme: DailyTheme,
          viewerID: String,
          metrics: StageMetrics,
@@ -54,6 +59,7 @@ struct StageCenter: View {
         self.group = group
         self.summary = summary
         self.viewer = viewer
+        self.excuse = excuse
         self.theme = theme
         self.viewerID = viewerID
         self.metrics = metrics
@@ -77,6 +83,7 @@ struct StageCenter: View {
     /// Invisible padding above and below the vow so its tap target is at least 44 pt; the stage
     /// spacing around it is reduced by the same amount, so the orb sits where the metrics say.
     static let vowTapPadding: CGFloat = 8
+    private static let excusedSphereSize: CGFloat = 150
 
     var body: some View {
         VStack(spacing: 0) {
@@ -126,17 +133,52 @@ struct StageCenter: View {
         return head + rest
     }
 
-    // MARK: - Orb (never dimmed, unchanged)
+    // MARK: - Orb, or the excused sphere (never dimmed)
 
+    /// The orb and the excused sphere crossfade in the orb's slot as soon as the excuse is in (behind its
+    /// sheet; a failed save swaps back).
     private var orb: some View {
+        ZStack {
+            if viewer.excusedToday {
+                excusedSphere
+                    .transition(.opacity)
+            } else {
+                orbView
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: Gap.orbSlot, height: Gap.orbSlot)
+        .frame(maxWidth: .infinity)
+        .animation(Anim.fade, value: viewer.excusedToday)
+    }
+
+    /// The orb itself is untouched. A check-in the group overrules keeps its seal (the ritual happened) but
+    /// loses the day's colours, which would otherwise claim "kept". The fade sits inside the day's identity,
+    /// so a new day still swaps the orb at once.
+    private var orbView: some View {
         OrbView(theme: theme,
                 sealed: viewer.checkedInToday,
                 onSealed: onSealed,
                 onFocusChange: onFocusChange,
                 onEarlyRelease: onEarlyRelease)
             .frame(width: Gap.orbSlot, height: Gap.orbSlot)
+            .saturation(overruledOrb ? 0 : 1)
+            .opacity(overruledOrb ? 0.7 : 1)
+            .animation(Anim.fade, value: overruledOrb)
             .id(StageScreen.orbKey(group: group, summary: summary))
-            .frame(maxWidth: .infinity)
+    }
+
+    private var overruledOrb: Bool {
+        viewer.checkedInToday && viewer.todayOverruled
+    }
+
+    /// Dashed while the excuse stands, plain unlit once the group overrules it.
+    private var excusedSphere: some View {
+        Sphere(theme: theme,
+               state: viewer.todayOverruled ? .unlit : .excused,
+               size: StageCenter.excusedSphereSize,
+               showsGlyph: true)
+            .animation(Anim.light, value: viewer.todayOverruled)
     }
 
     // MARK: - Streak
@@ -165,27 +207,21 @@ struct StageCenter: View {
 
     // MARK: - Caption
 
-    private var showsHint: Bool {
-        !captionKept && hintFlash
+    private var captionMode: CaptionMode {
+        if viewer.excusedToday {
+            return viewer.todayOverruled ? .excuseOverruled : .excused
+        }
+        if captionKept {
+            return viewer.todayOverruled ? .overruled : .kept
+        }
+        return hintFlash ? .hint : .open
     }
 
-    private var showsOpen: Bool {
-        !captionKept && !hintFlash
-    }
-
-    /// All three phrasings stay mounted in one slot, so its height never changes on check-in.
+    /// The check-in's phrasings stay mounted in one slot, so its height never changes on check-in, and a
+    /// vote arriving while Home is up changes the words in place. The excused pair has a slot of its own.
     private var caption: some View {
         ZStack {
-            openCaption
-                .opacity(showsOpen ? 1 : 0)
-                .accessibilityHidden(!showsOpen)
-            Text("Hold until the ring fills")
-                .foregroundStyle(Ink.text)
-                .opacity(showsHint ? 1 : 0)
-                .accessibilityHidden(!showsHint)
-            keptCaption
-                .opacity(captionKept ? 1 : 0)
-                .accessibilityHidden(!captionKept)
+            phrasings
         }
         .font(Fonts.subheadline)
         .foregroundStyle(Ink.text2)
@@ -193,8 +229,33 @@ struct StageCenter: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, Gap.gutter)
         .frame(maxWidth: .infinity)
-        .animation(Anim.fade, value: hintFlash)
-        .animation(Anim.fade, value: captionKept)
+        .animation(Anim.fade, value: captionMode)
+    }
+
+    @ViewBuilder
+    private var phrasings: some View {
+        if viewer.excusedToday {
+            phrasing(Text("Excused today"), mode: .excused)
+                .accessibilityLabel("Excused today. Your streak is paused.")
+            phrasing(Text("Excuse overruled · " + votingEnds), mode: .excuseOverruled)
+        } else {
+            phrasing(openCaption, mode: .open)
+            phrasing(Text("Hold until the ring fills").foregroundStyle(Ink.text), mode: .hint)
+            phrasing(keptCaption, mode: .kept)
+            phrasing(Text("Overruled · " + votingEnds), mode: .overruled)
+        }
+    }
+
+    private func phrasing(_ text: Text, mode: CaptionMode) -> some View {
+        let shown: Bool = captionMode == mode
+        return text
+            .opacity(shown ? 1 : 0)
+            .accessibilityHidden(!shown)
+    }
+
+    /// When voting on today closes, in the words Chat's cards use.
+    private var votingEnds: String {
+        ChatText.window(day: summary.currentDay, today: summary.currentDay, isTest: group.isTest)
     }
 
     /// Time left appears only in the last 4 h of a real group's day (nil for test groups).
@@ -234,19 +295,42 @@ struct StageCenter: View {
     }
 
     private var strip: some View {
-        MemberStrip(theme: theme,
-                    standings: summary.standings,
-                    viewerID: viewerID,
-                    viewerLit: viewerLit,
-                    atRisk: atRisk,
-                    cell: metrics.stripCell,
-                    rowTop: metrics.stripRowTop,
-                    onMember: onMember)
-            .padding(.top, metrics.tagGap)
-            .overlay(alignment: .top) {
-                tag
-            }
-            .roomDim(roomDimmed)
+        VStack(spacing: 0) {
+            gap
+            MemberStrip(theme: theme,
+                        standings: summary.standings,
+                        viewerID: viewerID,
+                        viewerLit: viewerLit,
+                        atRisk: atRisk,
+                        cell: metrics.stripCell,
+                        rowTop: metrics.stripRowTop,
+                        onMember: onMember)
+        }
+        .overlay(alignment: .top) {
+            tag
+        }
+        .roomDim(roomDimmed)
+    }
+
+    /// The reserved gap above the strip. The milestone tag lives in it as an overlay; today's excuse is
+    /// quoted in it instead, and may grow it at large sizes (an excuse is never a check-in).
+    @ViewBuilder
+    private var gap: some View {
+        if let text: String = excuse {
+            Text("\u{201C}" + text + "\u{201D}")
+                .font(Fonts.footnote)
+                .foregroundStyle(Ink.text2)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .padding(.horizontal, Gap.xxxl)
+                .padding(.top, metrics.tagOffset)
+                .frame(maxWidth: .infinity, minHeight: metrics.tagGap, alignment: .top)
+                .accessibilityLabel("Your excuse: " + text)
+        } else {
+            Color.clear
+                .frame(height: metrics.tagGap)
+        }
     }
 
     /// Inside the reserved gap (`tagOffset` from its top) on every screen size, for the rest of the day.
@@ -265,4 +349,14 @@ struct StageCenter: View {
         }
         return AnyTransition.opacity.combined(with: .scale(scale: 0.8))
     }
+}
+
+/// The caption's phrasings: one shows, the rest hold their place.
+private enum CaptionMode: Equatable {
+    case open
+    case hint
+    case kept
+    case overruled
+    case excused
+    case excuseOverruled
 }

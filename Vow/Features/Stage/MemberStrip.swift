@@ -1,13 +1,15 @@
 import SwiftUI
 
-/// Who kept today, at the moment of action: "2 of 5 kept today" over a row of faces lit in the day's
-/// colours (you: lit or ringed). Only the people in the group: inviting lives on the Group page. Wraps
-/// into rows instead of scrolling, so nobody is hidden.
+/// Who kept today, at the moment of action: "2 of 4 kept today" over a row of faces lit in the day's
+/// colours (you: lit or ringed), dashed for an excuse that stands and unlit for a claim the group has
+/// overruled. Anyone sitting the day out on an excuse is left out of the count. The faces and the count
+/// read `MemberDay` and `KeptNote`, as the Group page does. Only the people in the group: inviting lives
+/// on the Group page. Wraps into rows instead of scrolling, so nobody is hidden.
 struct MemberStrip: View {
     let theme: DailyTheme
     let standings: [MemberStanding]
     let viewerID: String
-    /// Your sphere and your place in the count light at the social beat, not at the seal.
+    /// Your check-in lights your sphere and your place in the count at the social beat, not at the seal.
     let viewerLit: Bool
     let atRisk: Bool
     let cell: CGFloat
@@ -37,7 +39,7 @@ struct MemberStrip: View {
         let id: String
         let name: String
         let initial: String
-        let state: SphereState
+        let status: MemberDay
         let isYou: Bool
     }
 
@@ -46,8 +48,9 @@ struct MemberStrip: View {
 
     var body: some View {
         let faces: [Face] = makeFaces()
+        let note: KeptNote = KeptNote(faces.map { (face: Face) -> MemberDay in face.status })
         VStack(spacing: 0) {
-            label
+            label(note)
             cells(faces)
                 .padding(.top, rowTop)
         }
@@ -57,32 +60,15 @@ struct MemberStrip: View {
 
     // MARK: - Label
 
-    private var keptCount: Int {
-        let others: [MemberStanding] = standings.filter { (s: MemberStanding) -> Bool in
-            s.userID != viewerID
-        }
-        let hasViewer: Bool = others.count != standings.count
-        return Digest.keptCount(others) + (hasViewer && viewerLit ? 1 : 0)
-    }
-
-    private var everyoneKept: Bool {
-        standings.count >= 2 && keptCount == standings.count
-    }
-
-    private var labelText: String {
-        if everyoneKept {
-            return "Everyone kept today"
-        }
-        return "\(keptCount) of \(standings.count) kept today"
-    }
-
-    private var label: some View {
-        Text(labelText)
+    /// Counted from the faces, so your place in it lights with your sphere.
+    private func label(_ note: KeptNote) -> some View {
+        Text(note.text)
             .font(Fonts.footnoteSemibold)
-            .foregroundStyle(everyoneKept ? Ink.text : Ink.text2)
+            .foregroundStyle(note.everyoneKept ? Ink.text : Ink.text2)
             .multilineTextAlignment(.center)
-            .rollingNumber(Double(keptCount))
+            .rollingNumber(Double(note.kept))
             .padding(.horizontal, Gap.gutter)
+            .accessibilityLabel(note.spoken)
     }
 
     // MARK: - Faces
@@ -92,14 +78,9 @@ struct MemberStrip: View {
         var out: [Face] = []
         for (index, s) in standings.enumerated() {
             let isYou: Bool = s.userID == viewerID
-            let state: SphereState
-            if isYou {
-                state = viewerLit ? .lit : .open
-            } else {
-                state = s.checkedInToday ? .lit : .unlit
-            }
+            let status: MemberDay = MemberDay.of(s, isViewer: isYou, viewerLit: viewerLit)
             let name: String = isYou ? "You" : names[index]
-            out.append(Face(id: s.userID, name: name, initial: NameFormat.initial(s.displayName), state: state, isYou: isYou))
+            out.append(Face(id: s.userID, name: name, initial: NameFormat.initial(s.displayName), status: status, isYou: isYou))
         }
         return out
     }
@@ -129,11 +110,11 @@ struct MemberStrip: View {
         } label: {
             VStack(spacing: Gap.xs) {
                 Sphere(theme: theme,
-                       state: face.state,
+                       state: face.status.sphere,
                        size: MemberStrip.sphereSize,
                        initial: face.initial,
                        ringColor: atRisk ? Ink.flame : Ink.text)
-                    .animation(Anim.light, value: face.state)
+                    .animation(Anim.light, value: face.status)
                 Text(face.name)
                     .font(face.isYou ? Fonts.captionBold : Fonts.caption)
                     .foregroundStyle(face.isYou ? Ink.text : Ink.text2)
@@ -145,16 +126,17 @@ struct MemberStrip: View {
         }
         .buttonStyle(PressStyle())
         .accessibilityLabel(face.name)
-        .accessibilityValue(status(face))
+        .accessibilityValue(face.status.phrase)
         .accessibilityShowsLargeContentViewer {
-            Label(face.name, systemImage: face.state == .lit ? "circle.fill" : "circle")
+            Label(face.name, systemImage: MemberStrip.symbol(face.status))
         }
     }
 
-    private func status(_ face: Face) -> String {
-        if face.state == .lit {
-            return "kept today"
+    private static func symbol(_ status: MemberDay) -> String {
+        switch status {
+        case .kept: return "circle.fill"
+        case .excused: return "circle.dashed"
+        case .yourTurn, .notYet, .overruled: return "circle"
         }
-        return face.isYou ? "your turn" : "not yet"
     }
 }

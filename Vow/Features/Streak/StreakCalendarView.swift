@@ -3,11 +3,12 @@ import Accessibility
 
 /// A calm month view of your vow days with one accent, the streak's flame. Kept days are filled with its
 /// gradient, and a run of them joins into one band that ends at a week row's edge and picks up again at
-/// the start of the next row, so every row holds whole capsules. A miss is a quiet grey disc, today is a
-/// ring, days to come are plain dates and the final day carries a flag. ‹ › page from the month the group
-/// began to a year past this one (or the final day's month, if later), and are the only way to change
-/// month: a horizontal drag would fight the page's vertical scroll. Always six week rows, so the card
-/// keeps one height.
+/// the start of the next row, so every row holds whole capsules. A miss is a quiet grey disc, a day sat
+/// out on an excuse a dashed ring the band stops around (the streak doesn't), today is a ring, days to
+/// come are plain dates and the final day carries a flag. ‹ › page from the month the group began to a
+/// year past this one (or the final day's month, if later), and are the only way to change month: a
+/// horizontal drag would fight the page's vertical scroll. Always six week rows, so the card keeps one
+/// height.
 struct StreakCalendarView: View {
     let group: GroupInfo
     let summary: GroupSummary
@@ -191,15 +192,13 @@ private struct DayCell: View {
     /// A joining band reaches this far past its cell, so neighbours overlap instead of leaving a seam.
     private static let seamOverlap: CGFloat = 0.5
     private static let ringWidth: CGFloat = 1.5
+    /// An excused day's ring: dashed, as on an excused sphere.
+    private static let excusedRing: StrokeStyle = StrokeStyle(lineWidth: DayCell.ringWidth, dash: [3, 3])
     /// Today kept: the ring sits inside the disc, clear of the band.
     private static let keptRingInset: CGFloat = 3
     private static let flagOffset: CGFloat = 14
     private static let flagBadge: CGFloat = 18
     private static let outsideOpacity: Double = 0.45
-
-    private var isToday: Bool {
-        day.state == .todayOpen || day.state == .todayKept
-    }
 
     /// Outside dates are only layout (the final day is never one, but keep it reachable if it were).
     private var isVowDay: Bool {
@@ -208,7 +207,7 @@ private struct DayCell: View {
 
     var body: some View {
         Text("\(day.dayNumber)")
-            .font(isToday ? Fonts.subheadlineSemibold : Fonts.subheadline)
+            .font(day.state.isToday ? Fonts.subheadlineSemibold : Fonts.subheadline)
             .monospacedDigit()
             .foregroundStyle(numberColor)
             .opacity(day.state == .outside ? DayCell.outsideOpacity : 1)
@@ -235,31 +234,33 @@ private struct DayCell: View {
             }
     }
 
-    /// Dark ink on the flame, readable grey on a miss; days to come plain, outside dates dim.
+    /// Dark ink on the flame, bright on today, readable grey on a miss or an excused day; days to come
+    /// plain, outside dates dim.
     private var numberColor: Color {
         switch day.state {
         case .kept, .todayKept:
             return Ink.onFlame
-        case .todayOpen:
+        case .todayOpen, .todayExcused, .todayOverruled:
             return Ink.text
-        case .missed, .upcoming:
+        case .missed, .excused, .upcoming:
             return Ink.text2
         case .outside:
             return Ink.text3
         }
     }
 
-    /// Kept: the flame gradient, top to bottom like the streak's flame. Missed: grey, never red.
+    /// Kept: the flame gradient, top to bottom like the streak's flame. Missed, or overruled today: grey,
+    /// never red.
     @ViewBuilder
     private var disc: some View {
         switch day.state {
         case .kept, .todayKept:
             Circle()
                 .fill(Ink.flameGradient)
-        case .missed:
+        case .missed, .todayOverruled:
             Circle()
                 .fill(Ink.missedDay)
-        case .todayOpen, .upcoming, .outside:
+        case .excused, .todayOpen, .todayExcused, .upcoming, .outside:
             Color.clear
         }
     }
@@ -285,7 +286,8 @@ private struct DayCell: View {
         }
     }
 
-    /// Today: a ring, flame in the last 4 h while still open. Once kept, a dark ring inside the flame disc.
+    /// Today: a ring, flame in the last 4 h while still open. Once kept, a dark ring inside the flame disc;
+    /// overruled, a bright ring on the grey disc. An excused day is a dashed ring, bright today.
     @ViewBuilder
     private var ring: some View {
         switch day.state {
@@ -296,6 +298,15 @@ private struct DayCell: View {
             Circle()
                 .strokeBorder(Ink.onFlame, lineWidth: DayCell.ringWidth)
                 .padding(DayCell.keptRingInset)
+        case .todayOverruled:
+            Circle()
+                .strokeBorder(Ink.text, lineWidth: DayCell.ringWidth)
+        case .excused:
+            Circle()
+                .strokeBorder(Ink.text3, style: DayCell.excusedRing)
+        case .todayExcused:
+            Circle()
+                .strokeBorder(Ink.text, style: DayCell.excusedRing)
         case .kept, .missed, .upcoming, .outside:
             EmptyView()
         }
@@ -315,7 +326,8 @@ private struct DayCell: View {
         }
     }
 
-    /// "kept", "missed", "today, your turn", "today, kept", "to come", plus ", last day" on the final day.
+    /// "kept", "missed", "excused", "today, your turn", "today, kept", "today, excused", "today, overruled",
+    /// "to come", plus ", last day" on the final day.
     private var value: String {
         var text: String
         switch day.state {
@@ -323,10 +335,16 @@ private struct DayCell: View {
             text = "kept"
         case .missed:
             text = "missed"
+        case .excused:
+            text = "excused"
         case .todayOpen:
             text = "today, your turn"
         case .todayKept:
             text = "today, kept"
+        case .todayExcused:
+            text = "today, excused"
+        case .todayOverruled:
+            text = "today, overruled"
         case .upcoming:
             text = "to come"
         case .outside:

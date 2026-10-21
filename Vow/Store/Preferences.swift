@@ -15,6 +15,7 @@ struct Preferences {
     static let reminderAskedKey: String = "vow.reminder.asked"
     static let revealDayKey: String = "vow.revealDay"
     static let lastVowKey: String = "vow.lastVow"
+    static let chatSeenKey: String = "vow.chatSeen"
 
     let defaults: UserDefaults
 
@@ -101,6 +102,26 @@ struct Preferences {
         defaults.set(zone, forKey: Preferences.lastVowKey)
     }
 
+    /// zoneName → the newest record that group's Chat showed when you last looked.
+    func loadChatSeen() -> [String: Date] {
+        var out: [String: Date] = [:]
+        for (zone, seconds) in chatSeenStamps() {
+            out[zone] = Date(timeIntervalSince1970: seconds)
+        }
+        return out
+    }
+
+    func saveChatSeen(zone: String, date: Date) {
+        var stamps: [String: Double] = chatSeenStamps()
+        stamps[zone] = date.timeIntervalSince1970
+        defaults.set(stamps, forKey: Preferences.chatSeenKey)
+    }
+
+    /// One dictionary for every group, in seconds since 1970.
+    private func chatSeenStamps() -> [String: Double] {
+        return defaults.dictionary(forKey: Preferences.chatSeenKey) as? [String: Double] ?? [:]
+    }
+
     func clearAll() {
         defaults.removeObject(forKey: Preferences.profileKey)
         defaults.removeObject(forKey: Preferences.testingModeKey)
@@ -110,6 +131,7 @@ struct Preferences {
         defaults.removeObject(forKey: Preferences.reminderAskedKey)
         defaults.removeObject(forKey: Preferences.revealDayKey)
         defaults.removeObject(forKey: Preferences.lastVowKey)
+        defaults.removeObject(forKey: Preferences.chatSeenKey)
         // Legacy single-player prototype state.
         defaults.removeObject(forKey: "vow.state.v1")
     }

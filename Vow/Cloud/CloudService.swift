@@ -6,6 +6,8 @@ enum CloudError: Error {
     case groupMissing
     case invalidLink
     case ownerCannotLeave
+    /// A post without the photo, video or thumbnail asked for.
+    case mediaMissing
 }
 
 /// Thin async wrapper over CloudKit. One group = one custom zone in the owner's private
@@ -65,6 +67,8 @@ final class CloudService: @unchecked Sendable {
         return ids
     }
 
+    /// The whole zone without assets (`Records.snapshotKeys`): posts arrive as text, aspect and duration, and their
+    /// photos and videos are fetched one at a time with `fetchAsset`.
     func fetchSnapshot(_ id: GroupID) async throws -> GroupSnapshot {
         let db: CKDatabase = database(for: id)
         let zoneID: CKRecordZone.ID = Records.zoneID(id)
@@ -74,10 +78,14 @@ final class CloudService: @unchecked Sendable {
         var groupRecord: CKRecord? = nil
         var members: [String: MemberInfo] = [:]
         var checkIns: [String: CheckInInfo] = [:]
+        var excuses: [String: ExcuseInfo] = [:]
+        var votes: [String: VoteInfo] = [:]
+        var posts: [String: PostInfo] = [:]
         var shareURL: URL? = nil
 
         while moreComing {
-            let changes = try await db.recordZoneChanges(inZoneWith: zoneID, since: token)
+            let changes = try await db.recordZoneChanges(inZoneWith: zoneID, since: token,
+                                                         desiredKeys: Records.snapshotKeys)
             for (_, result) in changes.modificationResultsByID {
                 switch result {
                 case .success(let modification):
@@ -86,6 +94,7 @@ final class CloudService: @unchecked Sendable {
                         if let url = share.url { shareURL = url }
                         continue
                     }
+                    let name: String = record.recordID.recordName
                     switch record.recordType {
                     case Records.groupType:
                         groupRecord = record
@@ -95,7 +104,19 @@ final class CloudService: @unchecked Sendable {
                         }
                     case Records.checkInType:
                         if let c = Records.checkInInfo(from: record) {
-                            checkIns[record.recordID.recordName] = c
+                            checkIns[name] = c
+                        }
+                    case Records.excuseType:
+                        if let e = Records.excuseInfo(from: record) {
+                            excuses[name] = e
+                        }
+                    case Records.voteType:
+                        if let v = Records.voteInfo(from: record) {
+                            votes[name] = v
+                        }
+                    case Records.postType:
+                        if let p = Records.postInfo(from: record) {
+                            posts[name] = p
                         }
                     default:
                         break
@@ -124,7 +145,40 @@ final class CloudService: @unchecked Sendable {
             if a.day != b.day { return a.day < b.day }
             return a.userID < b.userID
         }
-        return GroupSnapshot(group: group, members: memberList, checkIns: checkInList, fetchedAt: Date())
+        let excuseList: [ExcuseInfo] = excuses.values.sorted { (a: ExcuseInfo, b: ExcuseInfo) -> Bool in
+            if a.day != b.day { return a.day < b.day }
+            if a.userID != b.userID { return a.userID < b.userID }
+            return a.epoch < b.epoch
+        }
+        let voteList: [VoteInfo] = votes.values.sorted { (a: VoteInfo, b: VoteInfo) -> Bool in
+            if a.day != b.day { return a.day < b.day }
+            if a.subjectID != b.subjectID { return a.subjectID < b.subjectID }
+            if a.voterID != b.voterID { return a.voterID < b.voterID }
+            return a.epoch < b.epoch
+        }
+        let postList: [PostInfo] = posts.values.sorted { (a: PostInfo, b: PostInfo) -> Bool in
+            let sentA: Date = a.serverDate ?? .distantFuture
+            let sentB: Date = b.serverDate ?? .distantFuture
+            if sentA != sentB { return sentA < sentB }
+            return a.id < b.id
+        }
+        return GroupSnapshot(group: group, members: memberList, checkIns: checkInList, fetchedAt: Date(),
+                             excuses: excuseList, votes: voteList, posts: postList)
+    }
+
+    /// Downloads one of a post's assets and returns CloudKit's temporary file for it. Copy the file before
+    /// returning to the run loop: CloudKit may delete it.
+    func fetchAsset(postID: String, key: MediaAssetKey, in id: GroupID) async throws -> URL {
+        let db: CKDatabase = database(for: id)
+        let recordID: CKRecord.ID = Records.postRecordID(postID, in: id)
+        let results: [CKRecord.ID: Result<CKRecord, Error>] = try await db.records(for: [recordID],
+                                                                                 desiredKeys: [key.rawValue])
+        guard let result = results[recordID] else { throw CloudError.mediaMissing }
+        let record: CKRecord = try result.get()
+        guard let asset = record[key.rawValue] as? CKAsset, let url = asset.fileURL else {
+            throw CloudError.mediaMissing
+        }
+        return url
     }
 
     // MARK: - Creating / joining
@@ -191,7 +245,7 @@ final class CloudService: @unchecked Sendable {
     }
 
     func shareMetadata(for url: URL) async throws -> CKShare.Metadata {
-        let box = MetadataBox()
+        let box: ResultBox<CKShare.Metadata> = ResultBox<CKShare.Metadata>()
         let container: CKContainer = self.container
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<CKShare.Metadata, Error>) in
             let op = CKFetchShareMetadataOperation(shareURLs: [url])
@@ -243,27 +297,58 @@ final class CloudService: @unchecked Sendable {
     /// Idempotent: the record name is deterministic, so a re-send that hits an existing
     /// record returns the server's existing check-in.
     func saveCheckIn(_ checkIn: CheckInInfo, in id: GroupID) async throws -> CheckInInfo {
-        let db: CKDatabase = database(for: id)
-        let recordID: CKRecord.ID = Records.checkInRecordID(checkIn, in: id)
-        let record = CKRecord(recordType: Records.checkInType, recordID: recordID)
+        let record = CKRecord(recordType: Records.checkInType, recordID: Records.checkInRecordID(checkIn, in: id))
         Records.apply(checkIn, to: record)
+        let saved: CKRecord = try await create(record, in: database(for: id))
+        return Records.checkInInfo(from: saved) ?? checkIn
+    }
+
+    /// Idempotent like `saveCheckIn`: an excuse already on the server (a re-send, or one sent from another device)
+    /// comes back as the server's copy.
+    func saveExcuse(_ excuse: ExcuseInfo, in id: GroupID) async throws -> ExcuseInfo {
+        let record = CKRecord(recordType: Records.excuseType, recordID: Records.excuseRecordID(excuse, in: id))
+        Records.apply(excuse, to: record)
+        let saved: CKRecord = try await create(record, in: database(for: id))
+        return Records.excuseInfo(from: saved) ?? excuse
+    }
+
+    /// One record per (voter, subject, day): voting again overwrites it, and its server modificationDate, which
+    /// dates the vote, moves with it. Re-sending the verdict already saved changes nothing, so it can't push a vote
+    /// out of the window.
+    func saveVote(_ vote: VoteInfo, in id: GroupID) async throws -> VoteInfo {
+        let db: CKDatabase = database(for: id)
+        let recordID: CKRecord.ID = Records.voteRecordID(vote, in: id)
+        let existing: CKRecord? = try await existingRecord(recordID, in: db)
+        if let record = existing, let current = Records.voteInfo(from: record), current.counts == vote.counts {
+            return current
+        }
+        let record: CKRecord = existing ?? CKRecord(recordType: Records.voteType, recordID: recordID)
+        Records.apply(vote, to: record)
+        let saved: [CKRecord] = try await save([record], in: db, policy: .changedKeys, atomically: false)
+        return Records.voteInfo(from: saved.first ?? record) ?? vote
+    }
+
+    /// Saves a new post with its files. `progress` reports the upload (0…1) on CloudKit's queue, not the main
+    /// thread. Returns the post with the server's creationDate. Idempotent like `saveCheckIn`: a retry whose first
+    /// save landed but whose reply was lost finds the post there and returns the server's copy, read without its
+    /// photo or video.
+    func savePost(_ post: PostInfo, mediaURL: URL?, thumbURL: URL?, in id: GroupID,
+                  progress: @escaping @Sendable (Double) -> Void) async throws -> PostInfo {
+        let db: CKDatabase = database(for: id)
+        let recordID: CKRecord.ID = Records.postRecordID(post.id, in: id)
+        let record = CKRecord(recordType: Records.postType, recordID: recordID)
+        Records.apply(post, to: record)
+        Records.attach(media: mediaURL, thumb: thumbURL, to: record)
         do {
-            let saved: [CKRecord] = try await save([record], in: db, policy: .ifServerRecordUnchanged, atomically: false)
-            if let first = saved.first, let info = Records.checkInInfo(from: first) {
-                return info
-            }
-            var out: CheckInInfo = checkIn
-            out.serverDate = Date()
-            return out
+            let saved: CKRecord = try await upload(record, in: db, progress: progress)
+            return Records.postInfo(from: saved) ?? post
         } catch {
             guard CloudErrors.code(error) == .serverRecordChanged else { throw error }
-            let existing: CKRecord = try await db.record(for: recordID)
-            if let info = Records.checkInInfo(from: existing) {
-                return info
-            }
-            var out: CheckInInfo = checkIn
-            out.serverDate = existing.creationDate ?? Date()
-            return out
+            let found: [CKRecord.ID: Result<CKRecord, Error>] = try await db.records(for: [recordID],
+                                                                                   desiredKeys: Records.snapshotKeys)
+            guard let result = found[recordID] else { throw error }
+            let existing: CKRecord = try result.get()
+            return Records.postInfo(from: existing) ?? post
         }
     }
 
@@ -273,6 +358,15 @@ final class CloudService: @unchecked Sendable {
         let record: CKRecord = try await existingRecord(recordID, in: db)
             ?? CKRecord(recordType: Records.groupType, recordID: recordID)
         Records.apply(group, to: record)
+        _ = try await save([record], in: db, policy: .changedKeys, atomically: false)
+    }
+
+    /// Sets the Group record's voteRules and nothing else, on a freshly fetched record, so a stale GroupInfo can't
+    /// roll back its other fields. A missing group throws rather than creating a bare record.
+    func saveVoteRules(_ rules: [VoteRuleChange], in id: GroupID) async throws {
+        let db: CKDatabase = database(for: id)
+        let record: CKRecord = try await db.record(for: Records.groupRecordID(id))
+        Records.apply(voteRules: rules, to: record)
         _ = try await save([record], in: db, policy: .changedKeys, atomically: false)
     }
 
@@ -300,6 +394,48 @@ final class CloudService: @unchecked Sendable {
                 return nil
             }
             throw error
+        }
+    }
+
+    /// Saves a new record whose name is deterministic. If it already exists (a re-send after a lost reply, or the
+    /// same claim from another device), the server's copy comes back instead.
+    private func create(_ record: CKRecord, in db: CKDatabase) async throws -> CKRecord {
+        do {
+            let saved: [CKRecord] = try await save([record], in: db, policy: .ifServerRecordUnchanged, atomically: false)
+            return saved.first ?? record
+        } catch {
+            guard CloudErrors.code(error) == .serverRecordChanged else { throw error }
+            return try await db.record(for: record.recordID)
+        }
+    }
+
+    /// Saves one new record through an operation, which (unlike `modifyRecords`) reports its upload progress.
+    private func upload(_ record: CKRecord, in db: CKDatabase,
+                        progress: @escaping @Sendable (Double) -> Void) async throws -> CKRecord {
+        let box: ResultBox<CKRecord> = ResultBox<CKRecord>()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<CKRecord, Error>) in
+            let op = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: nil)
+            op.savePolicy = .ifServerRecordUnchanged
+            op.qualityOfService = .userInitiated
+            op.perRecordProgressBlock = { (_: CKRecord, fraction: Double) in
+                progress(fraction)
+            }
+            op.perRecordSaveBlock = { (_: CKRecord.ID, result: Result<CKRecord, Error>) in
+                box.set(result)
+            }
+            op.modifyRecordsResultBlock = { (result: Result<Void, Error>) in
+                if let saved = box.get() {
+                    cont.resume(with: saved)
+                    return
+                }
+                switch result {
+                case .failure(let error):
+                    cont.resume(throwing: error)
+                case .success:
+                    cont.resume(throwing: CKError(.internalError))
+                }
+            }
+            db.add(op)
         }
     }
 
@@ -334,18 +470,18 @@ final class CloudService: @unchecked Sendable {
     }
 }
 
-/// Thread-safe holder for the per-share result of CKFetchShareMetadataOperation.
-private final class MetadataBox: @unchecked Sendable {
+/// Thread-safe holder for a per-item result that an operation reports on its own queue before it completes.
+private final class ResultBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var value: Result<CKShare.Metadata, Error>? = nil
+    private var value: Result<Value, Error>? = nil
 
-    func set(_ v: Result<CKShare.Metadata, Error>) {
+    func set(_ v: Result<Value, Error>) {
         lock.lock()
         value = v
         lock.unlock()
     }
 
-    func get() -> Result<CKShare.Metadata, Error>? {
+    func get() -> Result<Value, Error>? {
         lock.lock()
         let v = value
         lock.unlock()
@@ -413,6 +549,7 @@ enum CloudErrors {
             case .groupMissing: return "That group no longer exists."
             case .invalidLink: return "That invite link doesn't work."
             case .ownerCannotLeave: return "You own this group. Delete it instead."
+            case .mediaMissing: return "That photo or video isn't available."
             }
         }
         guard let c = code(error) else {

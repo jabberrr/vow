@@ -1,18 +1,23 @@
 import SwiftUI
 
 /// The quiet line above the vow, shown only when it has something to say: the Test tag, "Day 4 of 21"
-/// (only with an end date; an open-ended vow counts nothing but its streak) and the Pot tag when
-/// yesterday's pot carried over. A finished vow says when it ended instead: "Finished · Oct 30".
+/// (only with an end date; an open-ended vow counts nothing but its streak), the Pot tag when
+/// yesterday's pot carried over, and "Yesterday was overruled", the one overnight word on a verdict (Chat
+/// and Activity carry the detail). A finished vow says when it ended instead: "Finished · Oct 30".
 /// With nothing to say it renders nothing, so the stage below keeps its place.
 struct StageMeta: View {
     let group: GroupInfo
     let summary: GroupSummary
     let now: Date
+    /// The group overruled your check-in or excuse of yesterday. StageScreen holds it through a hold and the
+    /// cascade, so a verdict landing then can't add a line.
+    let yesterdayOverruled: Bool
 
-    init(group: GroupInfo, summary: GroupSummary, now: Date) {
+    init(group: GroupInfo, summary: GroupSummary, now: Date, yesterdayOverruled: Bool) {
         self.group = group
         self.summary = summary
         self.now = now
+        self.yesterdayOverruled = yesterdayOverruled
     }
 
     var body: some View {
@@ -35,7 +40,7 @@ struct StageMeta: View {
     }
 
     private var hasItems: Bool {
-        group.isTest || dayText != nil || hasPot
+        group.isTest || dayText != nil || hasPot || yesterdayOverruled
     }
 
     /// One line when it fits; otherwise a centred column, so nothing is clipped at large sizes.
@@ -66,6 +71,11 @@ struct StageMeta: View {
         }
         if hasPot {
             Tag("Pot " + PointsText.string(summary.pot), systemImage: "arrow.uturn.forward", style: .gain)
+        }
+        if yesterdayOverruled {
+            Text("Yesterday was overruled")
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Home after the vow's final day: no orb and nothing to do today, only what you did over the whole vow,
 /// in real numbers. A calm ending: your vow, a sphere in the final day's colours (lit if you kept that
-/// day) and "Kept 26 of 30 days" over your best streak. StageScreen puts the meta line ("Finished ·
+/// day, dashed if you were excused) and "Kept 26 of 30 days" over your best streak. StageScreen puts the meta line ("Finished ·
 /// Oct 30") above it and, for a test owner, the test bar below.
 struct FinishedStage: View {
     let summary: GroupSummary
@@ -55,14 +55,22 @@ struct FinishedStage: View {
         summary.endDay ?? max(0, summary.currentDay - 1)
     }
 
-    private var keptFinalDay: Bool {
-        summary.viewer?.history.last == .kept
+    /// The final day as you lived it, by the group's verdict.
+    private var finalState: SphereState {
+        switch summary.viewer?.history.last {
+        case .kept?:
+            return .lit
+        case .excused?:
+            return .excused
+        case .missed?, nil:
+            return .unlit
+        }
     }
 
     /// Centred in the orb's slot, where the orb used to be.
     private var sphere: some View {
         Sphere(theme: Overview.theme(day: finalDay),
-               state: keptFinalDay ? .lit : .unlit,
+               state: finalState,
                size: FinishedStage.sphereSize,
                showsGlyph: true)
             .frame(width: Gap.orbSlot, height: Gap.orbSlot)

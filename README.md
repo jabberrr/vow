@@ -2,8 +2,10 @@
 
 Vow is an iOS 17 SwiftUI app about keeping one promise a day, together. You make a group with friends, everyone writes their own vow, and each day you press and hold the orb to check in. If you miss a day, you lose your stake and it goes into the pot. The pot is split among the people who kept their vow that day.
 
-- **Real groups over iCloud.** Groups, members and check-ins are stored in CloudKit, the group owner's iCloud database, and shared with members through an iCloud share. There is no server of our own and there are no accounts beyond your Apple ID.
+- **Real groups over iCloud.** Groups, members, check-ins, excuses, votes and chat (photos and videos included) are stored in CloudKit, in the group owner's iCloud database, and shared with members through an iCloud share. There is no server of our own and there are no accounts beyond your Apple ID.
 - **Points only.** No real money moves. Stakes, pots and balances are all points ("5 pts", "+1.33 pts").
+- **Chat, proof and votes.** Each group has a chat where every check-in and excuse shows up, with any photo or video proof. A check-in or excuse counts unless enough of the group votes "Doesn't count" by the end of the next day.
+- **Excuses.** Can't keep your vow today? Send an excuse instead of checking in. If it stands, the day sits out.
 - **Invite links.** Anyone with a group's link can join.
 - **Testing mode.** Lets you make test groups whose days you can move forward by hand.
 
@@ -28,43 +30,67 @@ Vow is an iOS 17 SwiftUI app about keeping one promise a day, together. You make
 
 ### First run creates the schema (Development)
 
-Debug builds run from Xcode use the CloudKit **Development** environment. There, CloudKit creates the record types `Group`, `Member` and `CheckIn` and their fields the first time the app saves one. To create every field, try each path once before you deploy:
+Debug builds run from Xcode use the CloudKit **Development** environment. There, CloudKit creates a record type or field the first time the app saves a record that has it. Some fields are written only on certain paths, so try each of these once, with two Apple IDs in one group, before you deploy:
 
-- create a group,
-- join it from a second Apple ID,
+- create a group, and join it from the second Apple ID,
 - create a group with an end date (this adds `Group.endDay`),
 - check in,
+- as the owner, change the voting rule (**Group** tab → **Overrule with**; this adds `Group.voteRules`),
+- send an excuse (**Can't today?** on Home) from an Apple ID that hasn't checked in that day,
+- from the other Apple ID, vote on that excuse or on a check-in in **Chat**,
+- send a chat message,
+- add proof once as a photo and once as a video (the Simulator has no camera, so use **Choose from library** there),
 - in a test group, advance a day and reset the group,
-- leave a group (this adds `Member.leftDay`).
+- leave a group.
+
+Then check in CloudKit Console that every type has all of its fields:
+
+| Record type | Fields (String or Int64 unless noted) |
+|---|---|
+| `Group` | `name`, `stake`, `createdAt` (Date/Time), `timeZoneID`, `isTest`, `testDay`, `epoch`, `ownerUserID`, `endDay`, `voteRules` (Int64 list) |
+| `Member` | `userID`, `displayName`, `vow`, `joinedDay`, `joinedEpoch`, `leftDay` |
+| `CheckIn` | `userID`, `day`, `epoch` |
+| `Excuse` | `userID`, `day`, `epoch`, `text` |
+| `Vote` | `voterID`, `subjectID`, `day`, `epoch`, `counts`, `castDay` |
+| `Post` | `authorID`, `text`, `day`, `epoch`, `isProof`, `mediaKind`, `aspect` (Double), `duration` (Double), `media` (Asset), `thumb` (Asset) |
 
 The app doesn't run queries (it reads whole zones), so it needs no indexes.
 
 > ### ⚠️ Before TestFlight or the App Store: deploy the schema to Production
 >
-> TestFlight and App Store builds use the CloudKit **Production** environment. Production starts empty, and the app can't create record types or fields there. Go to [CloudKit Console](https://icloud.developer.apple.com) → your container (`iCloud.<bundle ID>`) → **Schema** → **Deploy Schema Changes…**, and deploy to Production. If you skip this, every save fails in TestFlight. If you later add a field in Development, deploy again.
+> TestFlight and App Store builds use the CloudKit **Production** environment. Production starts empty, and the app can't create record types or fields there. Go to [CloudKit Console](https://icloud.developer.apple.com) → your container (`iCloud.app.dabora.vow`) → **Schema** → **Deploy Schema Changes…**, and deploy to Production. If you skip this, every save fails in TestFlight. If you later add a field in Development, deploy again. Chat added `Excuse`, `Vote`, `Post` and `Group.voteRules`: if you deployed before it, deploy again before shipping a build with Chat, or every excuse, vote, message, proof and voting-rule change fails to save.
 
 ## How it works
 
 **Groups.** A group has a name, a daily stake (1, 2, 5 or 10 pts) and members, and each member has their own vow. Days are real calendar days in the group's time zone, counted from the day the group was created.
 
-**Getting around.** The app opens on your most urgent open vow. Each group has four tabs: **Home** (your vow, the orb, your streak and who kept today), **Streak** (your streak and a month calendar of kept days, from the month the group began to a year ahead), **Activity** (every day's points) and **Group** (members, invite, points, your vow, leave or delete). The sidebar (**≡**, or a swipe from the left edge) lists your groups, **Add group**, **Settings** and you with your total balance; tap your name to change it.
+**Getting around.** The app opens on your most urgent open vow. Each group has five tabs: **Home** (your vow, the orb, your streak, who kept today, and a quiet line under them: **Can't today?** before you check in, **Add proof** after), **Chat** (messages, every check-in and excuse with its proof and votes), **Streak** (your streak and a month calendar of kept days, from the month the group began to a year ahead), **Activity** (every day's points) and **Group** (members, invite, points, the voting rule, your vow, leave or delete). A small dot on **Chat** means someone else posted, sent an excuse or voted on your day since you last looked. The sidebar (**≡**, or a swipe from the left edge) lists your groups, **Add group**, **Settings** and you with your total balance; tap your name to change it.
 
-**End dates.** A vow has no end unless you choose one when you create the group (**End date** → **Last day**). With an end date, Home shows "Day x of y" and the Streak calendar flags the last day. After the last day the vow is finished: nothing settles, nobody can check in and no reminders come. The end date is the field `Group.endDay`. Members still on an older build of the app keep settling days after the end until they update, so until then their numbers differ.
+**End dates.** A vow has no end unless you choose one when you create the group (**End date** → **Last day**). With an end date, Home shows "Day x of y" and the Streak calendar flags the last day. After the last day the vow is finished: nothing settles after it, nobody can check in or send an excuse and no reminders come. The group can still vote on the last day, and you can add proof for it, during the day after; the chat stays open. The end date is the field `Group.endDay`. Members still on an older build of the app keep settling days after the end until they update, so until then their numbers differ.
+
+**Chat.** Every check-in and excuse appears in the group's chat as a card, with any proof inside it, alongside ordinary messages. The other members vote **Counts** or **Doesn't count** on each card, and anyone can see who voted what. There is no push: the chat refreshes every 15 seconds while it's open, and every minute on the other tabs.
+
+**Proof.** Proof is a photo or video that shows the group you kept your vow. It's never required. When the check-in's animation is over, Home offers **Add proof** (take one, or choose one from your library); Chat's **+** offers the same. Proof goes on today's check-in or excuse, or on yesterday's while the group can still vote on it. Photos are sent at most 1,600 px on the long edge, and videos keep their first 20 seconds at 960×540. **Every member's photos and videos are stored in the group owner's iCloud storage**, because the group lives in the owner's database. If it fills up, members' check-ins, excuses, votes and posts fail until the owner frees space, and the app tells them whose storage is full.
+
+**Excuses.** **Can't today?** on Home, or **+ → Excuse for today** in Chat, sends a short excuse (up to 280 characters) instead of checking in. It closes today's orb for good: you can't check in after it or take it back. If the group doesn't overrule it, the day sits out: you lose no stake, get no share of the pot, and your streak pauses (it neither breaks nor grows).
+
+**Votes.** A check-in or excuse counts unless enough of the other members taking part that day vote **Doesn't count** by the end of the next day. If nobody votes, it counts, and in a group of one nothing can be overruled. How many it takes is the **voting rule** on the **Group** tab: **More than half** (the default), **Two thirds** or **Everyone** of the others. Only the owner changes it, and a change applies from tomorrow, so a day already being voted on keeps its rule. Until voting on a day closes, that day's points and streaks can still change. You can change your vote until half an hour before voting on that day closes (in a test group, until it closes). In a test group, voting on a day ends when the owner moves two days past it.
 
 **Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the last row of the members on a group's **Group** tab). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **≡ → Add group → Join with a link**.
 
 **Points.** At the end of each day:
 
-1. **Stake.** Every member who didn't check in loses the group's stake.
-2. **Pot.** Those stakes go into the pot.
-3. **Split.** The pot is split equally among the members who kept their vow that day.
-4. **Carry.** If nobody kept, the pot carries over to the next day.
+1. **Stake.** Every member who didn't keep their vow loses the group's stake: no check-in, or a check-in or excuse the group overruled.
+2. **Excused.** A member whose excuse stands sits the day out: no stake lost, no share of the pot.
+3. **Pot.** The lost stakes go into the pot.
+4. **Split.** The pot is split equally among the members whose check-in stands.
+5. **Carry.** If nobody kept, the pot carries over to the next day. If everyone was excused, nothing happens and the pot carries over untouched.
 
-No device stores the results. Every device calculates them the same way from the shared check-in records (`Domain/Settlement.swift`), so everyone sees the same numbers. A check-in's time comes from the iCloud server (the record's creation date), not the phone's clock. A check-in that reaches the server up to 10 minutes after midnight still counts for the day before.
+No device stores the results. Every device calculates them the same way from the shared check-in, excuse and vote records (`Domain/Settlement.swift`, with the votes counted in `Domain/Review.swift`), so everyone sees the same numbers. A check-in's or excuse's time comes from the iCloud server (the record's creation date), not the phone's clock, and one that reaches the server up to 10 minutes after midnight still counts for the day before. A vote's time is when the server last saw it change, and it counts if it arrives by the end of the next day, with the same 10 minutes' grace. Members still on a build from before Chat ignore excuses and votes, so their numbers differ until they update. Those builds also download every photo and video in the group on each refresh, which can use a lot of mobile data, so have every member update before anyone posts proof.
 
-**Reminders.** An optional daily local notification at a time you choose, only on days a vow is still open.
+**Reminders.** An optional daily local notification at a time you choose, only on days a vow is still open (an excuse counts as done).
 
-**Testing mode.** Go to **≡ → Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** (the test bar under the members on its **Home** tab). **Reset**, beside it, asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile and cache on this device. Real groups always follow the clock.
+**Testing mode.** Go to **≡ → Settings → Testing mode** and create a **test group**. Its day moves only when you, the owner, tap **Next day** (the test bar under the members on its **Home** tab). **Reset**, beside it, asks for confirmation, then starts the group over from its first day. Testing mode also shows **Reset local data**, which clears your profile, cache and downloaded photos and videos on this device. Real groups always follow the clock.
 
 ## Archive / TestFlight
 
@@ -73,7 +99,7 @@ No device stores the results. Every device calculates them the same way from the
 3. Pick **Any iOS Device (arm64)** as the destination, choose **Product → Archive**, then **Distribute App → App Store Connect**.
 4. If Xcode fails with `DistributionAppRecordProviderError`, the app has no App Store Connect record yet, or Xcode couldn't create one (often because the name is taken). Create it yourself: [App Store Connect](https://appstoreconnect.apple.com) → **Apps → + → New App**, pick your bundle ID, and use a unique name (e.g. "Vow – yourname"). Then distribute again.
 
-The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`) and a single 1024×1024 icon in `Vow/Assets.xcassets/AppIcon.appiconset`.
+The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`), which also holds the camera and microphone usage strings for proof (the library uses the system photo picker, which needs no permission), and a single 1024×1024 icon in `Vow/Assets.xcassets/AppIcon.appiconset`.
 
 ## Layout
 
@@ -81,16 +107,17 @@ The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`) and a single 1024×
 Vow/
   App/         Entry point (VowApp), root view, AppDelegate/SceneDelegate that pass accepted iCloud shares to the app
   Design/      Tokens and components: Sphere, FlameStreak, buttons, fields, sheet scaffold; formatters
-  Domain/      Pure Swift: group/member/check-in models, DayClock, Settlement (points), Points formatting, streak milestones, end date, streak calendar, cycle chain, digest, reminder plan
-  Cloud/       CloudService (CloudKit zones, shares, records), record mapping, ShareInbox
-  Store/       AppStore (@Observable app state), snapshot cache, preferences, Overview and the stage helpers
-  Features/    Main (the shell: top bar, tab bar, sidebar, and the Presenter that shows every sheet), Stage (Home), Streak, Activity, Group, Menu (Settings, Profile), Sheets, Root (onboarding, launch, problem)
+  Domain/      Pure Swift: group/member/check-in/excuse/vote/post models, DayClock, Settlement (points), Review (votes and verdicts), Points formatting, streak milestones, end date, streak calendar, cycle chain, digest, reminder plan
+  Cloud/       CloudService (CloudKit zones, shares, records, photo and video uploads), record mapping, ShareInbox
+  Media/       MediaPrep (photos and videos sized for sending), MediaCache (downloaded photos and videos on disk)
+  Store/       AppStore (@Observable app state, incl. chat, excuses and votes), snapshot cache, preferences, Overview, and the stage and chat helpers
+  Features/    Main (the shell: top bar, tab bar, sidebar, and the Presenter that shows every sheet and full-screen cover), Stage (Home), Chat (feed, claim cards, composer), Proof (camera, library, proof sheet, media viewer), Streak, Activity, Group (incl. the voting rule), Menu (Settings, Profile), Sheets (incl. the excuse), Root (onboarding, launch, problem)
   Reminders/   Daily reminder and its one-time offer
   Glyph/       Daily seed, constellation glyph and renderer
   Orb/         OrbView: press-and-hold check-in, ring, burst, haptic
   Sound/       SoundEngine: build-up tone and pop
   Info.plist, Vow.entitlements, Assets.xcassets
-VowTests/      XCTest unit tests (Domain: day math, settlement, end date, streak calendar, formatting, streaks, cycle chain, digest, reminder plan; vow status), hosted in Vow.app
+VowTests/      XCTest unit tests (Domain: day math, settlement, votes and verdicts, end date, streak calendar, formatting, streaks, cycle chain, digest, reminder plan; record mapping; vow status; chat feed and wording), hosted in Vow.app
 Config/        Vow.xcconfig (bundle ID + team, includes Local.xcconfig), Local.xcconfig.example
 project.yml               XcodeGen spec
 scripts/gen_xcodeproj.py  Python generator for Vow.xcodeproj that doesn't need XcodeGen
