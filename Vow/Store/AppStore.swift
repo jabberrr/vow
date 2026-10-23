@@ -1217,16 +1217,12 @@ final class AppStore {
         }
     }
 
+    /// Hands every group to the cache as it stands. The cache leaves out optimistic records, which would outlive
+    /// their save attempt, and encodes and writes off the main thread, so this costs a copy of references.
     private func persist() {
         var list: [GroupSnapshot] = []
         for id in groupIDs {
-            if var s = snapshots[id] {
-                // Never cache optimistic records: they'd outlive their save attempt.
-                s.checkIns.removeAll(where: { $0.serverDate == nil })
-                s.excuses.removeAll(where: { $0.serverDate == nil })
-                s.votes.removeAll(where: { $0.serverDate == nil })
-                s.posts.removeAll(where: { $0.serverDate == nil })
-                s.reactions.removeAll(where: { $0.serverDate == nil })
+            if let s = snapshots[id] {
                 list.append(s)
             }
         }

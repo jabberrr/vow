@@ -15,7 +15,10 @@ struct GroupActions {
 
 /// The Group tab: who is in the group (today's status, streak and net, Invite last), the group's points
 /// and last day, the voting rule, your vow, then leave or delete. No test controls: they stay on Home's
-/// test bar, next to the orb. Reads the store live on a per-minute clock, so your ring turns flame on time.
+/// test bar, next to the orb. Holds still unless enough members (or a large text size) make it scroll, but for
+/// a pull to refresh (`PageScroll`). At the default size an iPhone 16 holds three members with a pot and a last
+/// day (about 677 pt, of its 658 pt plus the bottom margin). Reads the store live on a per-minute clock, so your
+/// ring turns flame on time.
 struct GroupPage: View {
     let id: GroupID
     /// Bumped when the selected tab is tapped again: scroll to the top.
@@ -30,7 +33,8 @@ struct GroupPage: View {
         self.actions = actions
     }
 
-    private static let topID: String = "group-top"
+    /// Below the last card: empty margin, so the page may lose it under the tab bar and still hold still.
+    private static let bottomMargin: CGFloat = Gap.xxl
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -53,24 +57,14 @@ struct GroupPage: View {
     }
 
     private func loaded(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
-        ScrollViewReader { (proxy: ScrollViewProxy) in
-            ScrollView(.vertical, showsIndicators: false) {
-                column(group: group, summary: summary, now: now)
-            }
-            .refreshable {
-                await store.refreshAll()
-            }
-            .onChange(of: topToken) { _, _ in
-                withAnimation(Anim.standard) {
-                    proxy.scrollTo(GroupPage.topID, anchor: .top)
-                }
-            }
+        PageScroll(topToken: topToken, slack: GroupPage.bottomMargin, onRefresh: { await store.refreshAll() }) {
+            column(group: group, summary: summary, now: now)
         }
     }
 
     private func column(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
         let isMember: Bool = summary.viewer != nil
-        return VStack(spacing: Gap.xxl) {
+        return VStack(spacing: Gap.l) {
             GroupMembersCard(summary: summary,
                              viewerID: store.userID ?? "",
                              ownerID: group.ownerUserID,
@@ -80,18 +74,19 @@ struct GroupPage: View {
                              onInvite: actions.invite)
             factsCard(GroupPage.facts(group: group, summary: summary, now: now))
             votingSection(group: group, summary: summary)
-            if !summary.isFinished {
-                GroupActionRow(title: isMember ? "Edit vow" : "Write your vow",
-                               systemImage: "pencil",
-                               tint: Ink.text,
-                               action: actions.editVow)
+            VStack(spacing: Gap.m) {
+                if !summary.isFinished {
+                    GroupActionRow(title: isMember ? "Edit vow" : "Write your vow",
+                                   systemImage: "pencil",
+                                   tint: Ink.text,
+                                   action: actions.editVow)
+                }
+                exitRow
             }
-            exitRow
         }
         .padding(.horizontal, Gap.gutter)
-        .padding(.top, 14)
-        .padding(.bottom, Gap.xxl)
-        .id(GroupPage.topID)
+        .padding(.top, Gap.m)
+        .padding(.bottom, GroupPage.bottomMargin)
     }
 
     // MARK: - Points
@@ -152,22 +147,14 @@ struct GroupPage: View {
                         action: (isOwner && !summary.isFinished) ? actions.voteRule : nil)
                 .frame(maxWidth: .infinity)
                 .cardSurface()
-            FieldFooter(GroupPage.votingFooter(isSolo: summary.standings.count < 2,
-                                               isOwner: isOwner,
-                                               isFinished: summary.isFinished))
+            FieldFooter(GroupPage.votingFooter(isSolo: summary.standings.count < 2))
         }
     }
 
-    /// Who the rule counts ("the others", or "them" once others join), then who can change it. A finished
-    /// vow's rule can't change, so it stops after the first sentence.
-    private static func votingFooter(isSolo: Bool, isOwner: Bool, isFinished: Bool) -> String {
-        let rule: String = isSolo
-            ? "Once others join, check-ins and excuses count unless this many of them say they don't."
-            : "Check-ins and excuses count unless this many of the others say they don't, by the end of the next day."
-        if isFinished {
-            return rule
-        }
-        return rule + (isOwner ? " Changes start tomorrow." : " Only the owner can change it.")
+    /// Who votes and until when, in one line, so the page holds still at its usual size. That a change starts
+    /// tomorrow is the rule sheet's to say (and the row's while one waits); without a chevron, the row is read-only.
+    private static func votingFooter(isSolo: Bool) -> String {
+        return isSolo ? "Applies once others join." : "The others can vote until the end of the next day."
     }
 
     // MARK: - Leave or delete
@@ -197,7 +184,7 @@ private struct GroupFactRow: View {
         content
             .padding(.horizontal, Gap.l)
             .padding(.vertical, Gap.m)
-            .frame(minHeight: 50)
+            .frame(minHeight: Gap.hit)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(fact.title)
             .accessibilityValue(fact.spokenValue)
@@ -289,7 +276,7 @@ private struct VoteRuleRow: View {
         content
             .padding(.horizontal, Gap.l)
             .padding(.vertical, Gap.m)
-            .frame(minHeight: change == nil ? 50 : 64)
+            .frame(minHeight: change == nil ? Gap.hit : 64)
     }
 
     @ViewBuilder
@@ -351,7 +338,8 @@ private struct VoteRuleRow: View {
     }
 }
 
-/// A single action in its own card: "Edit vow", "Leave group", "Delete group".
+/// A single action in its own card: "Edit vow", "Leave group", "Delete group". Its 20 pt symbol takes less padding
+/// than a text row's, so both come out 44 pt.
 private struct GroupActionRow: View {
     let title: String
     let systemImage: String
@@ -380,8 +368,8 @@ private struct GroupActionRow: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Gap.l)
-            .padding(.vertical, Gap.m)
-            .frame(minHeight: 50)
+            .padding(.vertical, Gap.s)
+            .frame(minHeight: Gap.hit)
         }
         .buttonStyle(RowPressStyle())
         .cardSurface()

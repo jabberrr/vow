@@ -78,18 +78,24 @@ struct ChatComposer: View {
 
     // MARK: - Field
 
+    /// The text is centred in a box at least as tall as the "+" target; the field draws no prompt of its own
+    /// (`placeholder`).
     private var field: some View {
         HStack(alignment: .bottom, spacing: 0) {
-            TextField("Message", text: $draft, prompt: Text("Message").foregroundStyle(Ink.text3), axis: .vertical)
+            TextField("", text: $draft, axis: .vertical)
                 .font(Fonts.body)
                 .foregroundStyle(Ink.text)
                 .tint(Ink.text)
                 .lineLimit(typeSize.isAccessibilitySize ? 1...3 : 1...5)
                 .focused(focus)
+                .accessibilityLabel("Message")
                 .padding(.leading, Gap.m)
                 .padding(.trailing, canSend ? Gap.xs : Gap.m)
                 .padding(.vertical, Gap.s)
                 .frame(maxWidth: .infinity, minHeight: ChatComposer.fieldMinHeight, alignment: .leading)
+                .overlay(alignment: .leading) {
+                    placeholder
+                }
             if canSend {
                 sendButton
                     .transition(sendTransition)
@@ -97,6 +103,25 @@ struct ChatComposer: View {
         }
         .background(fieldBox)
         .animation(Anim.standard, value: canSend)
+    }
+
+    /// "Message" while the field is empty and not being edited, centred in its box and set where the text starts.
+    /// A vertical field draws its own prompt at the top of its text view, whose reported height needn't be its
+    /// line's (iOS 26 changes it on first focus), so that prompt sat high in the box; drawn here, it is centred
+    /// whatever the text view reports. It goes while you edit, so it never sits beside the caret or over text
+    /// still being composed (a Japanese keyboard's, say). It takes no touches, and VoiceOver hears the field's
+    /// label instead.
+    @ViewBuilder
+    private var placeholder: some View {
+        if draft.isEmpty && !focus.wrappedValue {
+            Text("Message")
+                .font(Fonts.body)
+                .foregroundStyle(Ink.text3)
+                .lineLimit(1)
+                .padding(.horizontal, Gap.m)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Catches taps in the field's padding, so the whole box focuses it.

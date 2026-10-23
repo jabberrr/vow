@@ -2,7 +2,9 @@ import SwiftUI
 
 /// No groups yet: a stage waiting for its vow, on the same grid as a real one, with the one first
 /// decision where the daily action will be. Centred between the top bar and the bottom edge (there is
-/// no tab bar without a group); it scrolls when it doesn't fit.
+/// no tab bar without a group). It holds still when it fits and scrolls when it doesn't, with a pull to
+/// refresh either way (`PageScroll`): with no group there is no timed refresh, so that is the only way to
+/// sync here.
 struct EmptyStage: View {
     let metrics: StageMetrics
     let onCreate: () -> Void
@@ -22,18 +24,13 @@ struct EmptyStage: View {
     private static let vowTapPadding: CGFloat = 8
 
     var body: some View {
-        GeometryReader { (geometry: GeometryProxy) in
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 0) {
-                    Spacer(minLength: Gap.s)
-                    block
-                    Spacer(minLength: Gap.xxl)
-                }
-                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+        PageScroll(fillsHeight: true, onRefresh: { await store.refreshAll() }) {
+            VStack(spacing: 0) {
+                Spacer(minLength: Gap.s)
+                block
+                Spacer(minLength: Gap.xxl)
             }
-            .refreshable {
-                await store.refreshAll()
-            }
+            .frame(maxWidth: .infinity)
         }
         .vowBackground()
     }

@@ -23,11 +23,13 @@ struct ChatActions {
 /// The Chat tab: the group's messages, one card per check-in or excuse with its proof and votes, and the
 /// composer. The latest is at the bottom, where the page opens and where re-tapping the tab returns; the
 /// week up to the newest item shows until Earlier is tapped. There is no pull to refresh, since the top is
-/// history: the shell polls while Chat is shown, the page refreshes on appear and after your votes, and the
-/// store refreshes after your other sends. The chat is marked seen on appear, on every change and on
-/// leaving, so the tab's dot never lights for what you are reading. Chat presents nothing itself; it asks the
-/// shell through `actions`. Its own two overlays, the "+" card and the reaction picker, close when the sidebar
-/// covers the page. The shell ignores the keyboard, so the page lifts its own composer.
+/// history: the shell polls while Chat is shown, the page refreshes when it is shown and after your votes, and
+/// the store refreshes after your other sends. The chat is marked seen when it is shown, on every change and on
+/// leaving, so the tab's dot never lights for what you are reading. Mounted as the neighbour a swipe brings into
+/// view, it is not shown yet (`isCurrent`): a swipe that springs back never counts as a visit. It still opens at
+/// the bottom, since the visit a landing makes is the same view. Chat presents nothing itself; it asks the shell
+/// through `actions`. Its own two overlays, the "+" card and the reaction picker, close when the sidebar covers
+/// the page. The shell ignores the keyboard, so the page lifts its own composer.
 struct ChatPage: View {
     let id: GroupID
     /// Bumped when the Chat tab is tapped again: scroll to the latest.
@@ -37,6 +39,9 @@ struct ChatPage: View {
     /// Something covers the page (the sidebar): the "+" card and the reaction picker close, as they would
     /// for a tap outside them.
     let covered: Bool
+    /// The page shown (Chat is the tab), not the neighbour a swipe toward it has mounted: only then is the chat
+    /// marked seen, refreshed and its hold on the touch reported to the shell.
+    let isCurrent: Bool
     let actions: ChatActions
 
     @Environment(AppStore.self) private var store
@@ -54,6 +59,8 @@ struct ChatPage: View {
     @State private var reactingID: String? = nil
     /// The keyboard's top edge in global coordinates while it is up.
     @State private var keyboardTop: CGFloat? = nil
+    /// The page's bottom edge in global coordinates, which the keyboard's top is measured against.
+    @State private var pageBottom: PageBottom = PageBottom()
     /// How far the composer rides up over the keyboard, which covers the tab bar.
     @State private var lift: CGFloat = 0
     @FocusState private var composerFocused: Bool
@@ -67,11 +74,12 @@ struct ChatPage: View {
     private static let keyboardHides: NotificationCenter.Publisher =
         NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
 
-    init(id: GroupID, topToken: Int, draft: Binding<String>, covered: Bool, actions: ChatActions) {
+    init(id: GroupID, topToken: Int, draft: Binding<String>, covered: Bool, isCurrent: Bool, actions: ChatActions) {
         self.id = id
         self.topToken = topToken
         self._draft = draft
         self.covered = covered
+        self.isCurrent = isCurrent
         self.actions = actions
     }
 
@@ -88,18 +96,26 @@ struct ChatPage: View {
         }
         .vowBackground()
         .onAppear {
-            store.markChatSeen(id)
-            actions.overlay(holdsTouch)
-            Task {
-                await store.refresh(id)
+            if isCurrent {
+                shown()
             }
         }
         .onDisappear {
-            store.markChatSeen(id)
-            actions.overlay(false)
+            if isCurrent {
+                left()
+            }
+        }
+        .onChange(of: isCurrent) { (_: Bool, current: Bool) in
+            if current {
+                shown()
+            } else {
+                left()
+            }
         }
         .onChange(of: store.snapshots[id]) { _, _ in
-            store.markChatSeen(id)
+            if isCurrent {
+                store.markChatSeen(id)
+            }
         }
         .onChange(of: covered) { (_: Bool, isCovered: Bool) in
             if isCovered {
@@ -108,11 +124,32 @@ struct ChatPage: View {
             }
         }
         .onChange(of: holdsTouch) { (_: Bool, holds: Bool) in
-            actions.overlay(holds)
+            if isCurrent {
+                actions.overlay(holds)
+            }
         }
         .sensoryFeedback(.impact(weight: .medium), trigger: reactingID) { (_: String?, held: String?) -> Bool in
             held != nil
         }
+    }
+
+    // MARK: - Visits
+
+    /// The page is shown: on its first appearance as the tab, as a swipe toward it lands, and again when a cover
+    /// over it (the camera, the media viewer) closes. What is here counts as read, the shell hears whether the
+    /// page holds the touch, and the group refreshes so replies show before the next poll.
+    private func shown() {
+        store.markChatSeen(id)
+        actions.overlay(holdsTouch)
+        Task {
+            await store.refresh(id)
+        }
+    }
+
+    /// The page stops being shown: another tab or group, a cover over it, or a swipe that left it the neighbour.
+    private func left() {
+        store.markChatSeen(id)
+        actions.overlay(false)
     }
 
     // MARK: - Layout
@@ -128,7 +165,10 @@ struct ChatPage: View {
         }
     }
 
-    /// The page's size is read once: the shell ignores the keyboard, so it never changes while typing.
+    /// The reader gives the page's size, which never changes while typing (the shell ignores the keyboard). Where
+    /// the page sits on screen, which only the keyboard lift needs, is measured by a reader of its own behind the
+    /// page, into `pageBottom`: read here, it would rebuild the whole page, every row included, on each frame of a
+    /// slide between tabs, where now only that empty reader runs again.
     private func loaded(_ snapshot: GroupSnapshot, now: Date) -> some View {
         let group: GroupInfo = snapshot.group
         let feed: ChatFeed = memo.feed(snapshot, viewerID: store.userID ?? "", now: now, showsAll: showsAll)
@@ -143,9 +183,16 @@ struct ChatPage: View {
                                             isMember: isMember,
                                             isFinished: EndDate.isFinished(group, now: now),
                                             failedPosts: failedPosts,
-                                            size: geometry.size,
-                                            maxY: geometry.frame(in: .global).maxY),
+                                            size: geometry.size),
                        proxy: proxy)
+            }
+        }
+        .background {
+            GeometryReader { (reader: GeometryProxy) in
+                Color.clear
+                    .onChange(of: reader.frame(in: .global).maxY, initial: true) { (_: CGFloat, maxY: CGFloat) in
+                        pageBottom.maxY = maxY
+                    }
             }
         }
     }
@@ -185,16 +232,16 @@ struct ChatPage: View {
             }
         }
         .onReceive(ChatPage.keyboardChanges) { (note: Notification) in
-            keyboardWillChange(note, hiding: false, maxY: context.maxY, proxy: proxy)
+            keyboardWillChange(note, hiding: false, proxy: proxy)
         }
         .onReceive(ChatPage.keyboardHides) { (note: Notification) in
-            keyboardWillChange(note, hiding: true, maxY: context.maxY, proxy: proxy)
+            keyboardWillChange(note, hiding: true, proxy: proxy)
         }
         .onChange(of: composerFocused) { (_: Bool, focused: Bool) in
             if focused {
                 closePlus()
             }
-            updateLift(maxY: context.maxY, seconds: ChatPage.keyboardSeconds, proxy: proxy)
+            updateLift(seconds: ChatPage.keyboardSeconds, proxy: proxy)
         }
         .onChange(of: topToken) { _, _ in
             scrollToBottom(proxy, animated: true)
@@ -714,20 +761,20 @@ struct ChatPage: View {
 
     // MARK: - Keyboard
 
-    private func keyboardWillChange(_ note: Notification, hiding: Bool, maxY: CGFloat, proxy: ScrollViewProxy) {
+    private func keyboardWillChange(_ note: Notification, hiding: Bool, proxy: ScrollViewProxy) {
         let info: [AnyHashable: Any] = note.userInfo ?? [:]
         let frame: CGRect? = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         let given: Double? = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue
         keyboardTop = hiding ? nil : frame?.minY
-        updateLift(maxY: maxY, seconds: given ?? ChatPage.keyboardSeconds, proxy: proxy)
+        updateLift(seconds: given ?? ChatPage.keyboardSeconds, proxy: proxy)
     }
 
     /// The composer rides on the keyboard only while its own field has focus, so a sheet's keyboard never
     /// moves it. If the bottom of the feed was in view, it stays in view.
-    private func updateLift(maxY: CGFloat, seconds: Double, proxy: ScrollViewProxy) {
+    private func updateLift(seconds: Double, proxy: ScrollViewProxy) {
         var target: CGFloat = 0
         if composerFocused, let top: CGFloat = keyboardTop {
-            target = max(0, maxY - top)
+            target = max(0, pageBottom.maxY - top)
         }
         guard target != lift else { return }
         let follows: Bool = atBottom
@@ -758,8 +805,13 @@ private struct ChatContext {
     let failedPosts: Set<String>
     /// The page, between the top bar and the tab bar.
     let size: CGSize
-    /// The page's bottom edge in global coordinates, for the keyboard lift.
-    let maxY: CGFloat
+}
+
+/// The page's bottom edge in global coordinates, for the keyboard lift. Nothing is drawn from it, so it is a
+/// reference: setting it never re-renders the page. It changes only if the page moves up or down, never in a
+/// slide between tabs.
+private final class PageBottom {
+    var maxY: CGFloat = 0
 }
 
 /// The feed, rebuilt only when the snapshot, you, the minute or the range changes, so typing or an upload's

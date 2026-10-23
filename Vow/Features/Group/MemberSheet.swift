@@ -152,7 +152,7 @@ private struct MemberDetails: View {
                 .foregroundStyle(Ink.text)
                 .fixedSize(horizontal: false, vertical: true)
             if isOwner {
-                OwnerCrown(font: Fonts.title2)
+                OwnerCrown(textStyle: .title2)
             }
         }
     }

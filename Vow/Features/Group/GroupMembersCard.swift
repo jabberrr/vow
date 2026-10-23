@@ -159,8 +159,8 @@ private struct GroupMemberRow: View {
                 trailingColumn
             }
             .padding(.horizontal, Gap.l)
-            .padding(.vertical, 10)
-            .frame(minHeight: 60)
+            .padding(.vertical, Gap.s)
+            .frame(minHeight: 52)
         }
         .buttonStyle(RowPressStyle())
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
@@ -197,7 +197,7 @@ private struct GroupMemberRow: View {
                 .foregroundStyle(Ink.text)
                 .lineLimit(1)
             if isOwner {
-                OwnerCrown(font: nameFont)
+                OwnerCrown(textStyle: .subheadline)
             }
         }
     }
@@ -235,8 +235,8 @@ private struct GroupInviteRow: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Gap.l)
-            .padding(.vertical, 10)
-            .frame(minHeight: 56)
+            .padding(.vertical, Gap.s)
+            .frame(minHeight: 52)
         }
         .buttonStyle(RowPressStyle())
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
@@ -358,22 +358,71 @@ struct KeptNote {
     }
 }
 
-/// The owner's mark beside their name, on the Group page and in the member sheet: a small crown in the name's
-/// own font, so it scales with it. Neutral, because it is a role and not a status. VoiceOver hears "owner" in
-/// the label it sits by instead (`MemberText.spokenName`).
+/// The owner's mark beside their name, on the Group page and in the member sheet: a plain crown, three points
+/// over a flat band, standing on the name's baseline like a letter, well under its cap height. Drawn rather than
+/// `crown.fill`, whose jewels and detail are noise at this size, and scaled with the name's text style (and capped
+/// with it), so it is a clean shape at every size. Neutral, because it is a role and not a status. VoiceOver
+/// hears "owner" in the label it sits by instead (`MemberText.spokenName`).
 struct OwnerCrown: View {
-    let font: Font
+    @ScaledMetric private var height: CGFloat
 
-    init(font: Font) {
-        self.font = font
+    init(textStyle: Font.TextStyle) {
+        self._height = ScaledMetric(wrappedValue: OwnerCrown.pointSize(textStyle) * OwnerCrown.heightShare,
+                                    relativeTo: textStyle)
     }
 
+    /// The crown's height as a share of the text's point size: 7.5 pt beside a 15 pt name.
+    private static let heightShare: CGFloat = 0.5
+    /// Width over height.
+    private static let aspect: CGFloat = 1.25
+
     var body: some View {
-        Image(systemName: "crown.fill")
-            .font(font)
-            .imageScale(.small)
-            .foregroundStyle(Ink.text2)
+        CrownShape()
+            .fill(Ink.text2)
+            .frame(width: height * OwnerCrown.aspect, height: height)
+            .alignmentGuide(.firstTextBaseline) { (d: ViewDimensions) -> CGFloat in
+                d[.bottom]
+            }
             .accessibilityHidden(true)
+    }
+
+    /// A text style's size at the default (Large) setting, which `ScaledMetric` scales from.
+    private static func pointSize(_ style: Font.TextStyle) -> CGFloat {
+        switch style {
+        case .largeTitle: return 34
+        case .title: return 28
+        case .title2: return 22
+        case .title3: return 20
+        case .headline, .body: return 17
+        case .callout: return 16
+        case .subheadline: return 15
+        case .footnote: return 13
+        case .caption: return 12
+        case .caption2: return 11
+        default: return 17
+        }
+    }
+}
+
+/// Three points of one height on a body that narrows towards a flat band, with a sliver of space between the two
+/// so the band reads at small sizes.
+private struct CrownShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w: CGFloat = rect.width
+        let h: CGFloat = rect.height
+        let bodyBottom: CGFloat = rect.minY + h * 0.7
+        let bandTop: CGFloat = rect.minY + h * 0.82
+        var path: Path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + w * 0.3, y: rect.minY + h * 0.4))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + w * 0.7, y: rect.minY + h * 0.4))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + w * 0.86, y: bodyBottom))
+        path.addLine(to: CGPoint(x: rect.minX + w * 0.14, y: bodyBottom))
+        path.closeSubpath()
+        path.addRect(CGRect(x: rect.minX + w * 0.14, y: bandTop, width: w * 0.72, height: rect.maxY - bandTop))
+        return path
     }
 }
 

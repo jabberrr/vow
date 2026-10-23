@@ -4,8 +4,8 @@ import SwiftUI
 /// split from the next by a hairline, with no cards. Each stake lost is followed by an arrow line for each
 /// keeper who got a part of it (`ActivityFeed`). Until a day has settled it opens with when days close. While
 /// the group can still vote on yesterday, its header says so: its points can still change. No title of its
-/// own (the tab says it). Reads the store live, on a per-minute clock so "Today" and "Yesterday" move on at
-/// midnight.
+/// own (the tab says it). A new group's few days hold still, but for a pull to refresh (`PageScroll`). Reads
+/// the store live, on a per-minute clock so "Today" and "Yesterday" move on at midnight.
 struct ActivityPage: View {
     let id: GroupID
     /// Bumped when the selected tab is tapped again: scroll to the top.
@@ -13,12 +13,13 @@ struct ActivityPage: View {
 
     @Environment(AppStore.self) private var store
 
+    /// Below the last day: empty margin, so the page may lose it under the tab bar and still hold still.
+    private static let bottomMargin: CGFloat = Gap.xxl
+
     init(id: GroupID, topToken: Int) {
         self.id = id
         self.topToken = topToken
     }
-
-    private static let topID: String = "activity-top"
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -46,18 +47,8 @@ struct ActivityPage: View {
         let sections: [ActivitySection] = ActivityFeed.build(summary.days, group: group, viewerID: store.userID ?? "",
                                                              titleDay: titleDay, votingDay: votingDay, now: now)
         let waiting: Bool = !summary.isFinished && !ActivityPage.hasSettledDay(summary)
-        return ScrollViewReader { (proxy: ScrollViewProxy) in
-            ScrollView(.vertical, showsIndicators: false) {
-                column(group: group, sections: sections, waiting: waiting)
-            }
-            .refreshable {
-                await store.refreshAll()
-            }
-            .onChange(of: topToken) { _, _ in
-                withAnimation(Anim.standard) {
-                    proxy.scrollTo(ActivityPage.topID, anchor: .top)
-                }
-            }
+        return PageScroll(topToken: topToken, slack: ActivityPage.bottomMargin, onRefresh: { await store.refreshAll() }) {
+            column(group: group, sections: sections, waiting: waiting)
         }
     }
 
@@ -79,8 +70,7 @@ struct ActivityPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Gap.gutter)
         .padding(.top, Gap.l)
-        .padding(.bottom, Gap.xxl)
-        .id(ActivityPage.topID)
+        .padding(.bottom, ActivityPage.bottomMargin)
     }
 
     private func emptyNote(_ group: GroupInfo) -> some View {

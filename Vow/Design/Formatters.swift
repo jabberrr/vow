@@ -219,24 +219,86 @@ enum DayText {
 
     /// "8:14 PM" in the group's time zone: the locale's short time style, so a 24-hour setting reads "20:14".
     static func time(_ date: Date, timeZoneID: String, locale: Locale = Locale.current) -> String {
-        let timeFormatter: DateFormatter = base(calendar: DayClock.calendar(timeZoneID), locale: locale)
-        timeFormatter.timeStyle = .short
-        return timeFormatter.string(from: date)
+        let calendar: Calendar = DayClock.calendar(timeZoneID)
+        return DayFormatters.shared.formatter(.shortTime, calendar: calendar, locale: locale).string(from: date)
     }
 
     private static func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
-        let formatter: DateFormatter = base(calendar: calendar, locale: locale)
-        formatter.setLocalizedDateFormatFromTemplate(template)
-        return formatter
+        return DayFormatters.shared.formatter(.template(template), calendar: calendar, locale: locale)
+    }
+}
+
+// MARK: - Formatters
+
+/// DayText's formatters, each made once per format, time zone and locale and then shared: making one (and the
+/// pattern behind a template) costs far more than formatting with it, and Chat formats a time for every row it
+/// draws. A formatter is never changed once made, so any thread may format with it. A change to the device's
+/// region settings empties the cache, since a preference can change without the locale's identifier changing.
+private final class DayFormatters: @unchecked Sendable {
+    static let shared: DayFormatters = DayFormatters()
+
+    /// The locale's short time ("8:14 PM"), or a date template ("MMMd").
+    enum Format: Hashable {
+        case shortTime
+        case template(String)
+    }
+
+    /// The calendar's identifier, so a formatter made for one calendar never formats for another. The time zone
+    /// is the calendar's own, so a group zone that falls back to the device's follows the device. The hour cycle
+    /// tells `Locale.current` with a 24-hour setting from a plain locale of the same identifier.
+    private struct Key: Hashable {
+        let format: Format
+        let calendarID: Calendar.Identifier
+        let timeZoneID: String
+        let localeID: String
+        let hourCycle: Locale.HourCycle
+    }
+
+    private let lock: NSLock = NSLock()
+    /// Only under `lock`.
+    private var made: [Key: DateFormatter] = [:]
+    private var localeObserver: NSObjectProtocol? = nil
+
+    private init() {
+        localeObserver = NotificationCenter.default.addObserver(forName: NSLocale.currentLocaleDidChangeNotification,
+                                                                object: nil,
+                                                                queue: nil) { [weak self] (_: Notification) in
+            self?.removeAll()
+        }
+    }
+
+    func formatter(_ format: Format, calendar: Calendar, locale: Locale) -> DateFormatter {
+        let key: Key = Key(format: format, calendarID: calendar.identifier, timeZoneID: calendar.timeZone.identifier,
+                           localeID: locale.identifier, hourCycle: locale.hourCycle)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached: DateFormatter = made[key] {
+            return cached
+        }
+        let fresh: DateFormatter = DayFormatters.make(format, calendar: calendar, locale: locale)
+        made[key] = fresh
+        return fresh
+    }
+
+    private func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        made.removeAll()
     }
 
     /// Locale first: setting it can reset the formatter's calendar to the locale's own, so the group's
     /// Gregorian calendar and time zone go on after it.
-    private static func base(calendar: Calendar, locale: Locale) -> DateFormatter {
+    private static func make(_ format: Format, calendar: Calendar, locale: Locale) -> DateFormatter {
         let formatter: DateFormatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
+        switch format {
+        case .shortTime:
+            formatter.timeStyle = .short
+        case .template(let template):
+            formatter.setLocalizedDateFormatFromTemplate(template)
+        }
         return formatter
     }
 }

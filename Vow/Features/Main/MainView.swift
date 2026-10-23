@@ -2,11 +2,13 @@ import SwiftUI
 import UIKit
 
 /// The signed-in app, as a shell: the pinned top bar, the selected group's page for the chosen tab, the
-/// tab bar and the sidebar overlay, which stays mounted and only ever slides or fades. It owns the selection, the
-/// tab and the swipe between tabs, the fallback refresh (every 15 s, every 5 s on Chat), Chat's unsent drafts,
-/// the reminder sync and the `Presenter`, whose one sheet, one full-screen cover and one confirmation dialog are
-/// the only ones in the main experience: pages and chrome ask for them through closures. It ignores the
-/// keyboard: Chat lifts its own composer, and a sheet's keyboard never moves the shell behind it.
+/// tab bar and the sidebar overlay, which stays mounted and only ever slides or fades. The bars and the page area
+/// are stacked, not overlaid, so a page (and a swipe's track, clipped to that area) never reaches under a bar.
+/// It owns the selection, the tab and the swipe between tabs (`PagerTrack`), the fallback refresh (every 15 s,
+/// every 5 s on Chat), Chat's unsent drafts, the reminder sync and the `Presenter`, whose one sheet, one
+/// full-screen cover and one confirmation dialog are the only ones in the main experience: pages and chrome ask
+/// for them through closures. It ignores the keyboard: Chat lifts its own composer, and a sheet's keyboard never
+/// moves the shell behind it.
 struct MainView: View {
     @Binding var roomDimmed: Bool
     /// A sheet, a cover, a dialog or the sidebar is up: RootView's toast waits briefly, then it is dropped.
@@ -41,11 +43,10 @@ struct MainView: View {
     /// The sidebar was closed while a swipe from the edge or across Home was still under the finger: that
     /// swipe no longer shows or opens the panel. Cleared when it ends.
     @State private var edgeCancelled: Bool = false
-    /// A swipe on the page that owns its touch, as `SwipeablePage` reports it: which way the slide would go,
-    /// or how far Home's swipe has brought the sidebar out. nil while none does (a scroll never sets it).
+    /// A swipe under way, as `PagerTrack` reports it, from taking its touch until its track has landed: the side
+    /// its neighbour is mounted on, or how far Home's swipe has brought the sidebar out. nil while none is (a
+    /// scroll never sets it).
     @State private var pageSwipe: PageSwipe? = nil
-    /// The slide a released swipe started, until it has finished: the page it brings in arrives with it.
-    @State private var pageSlide: PageSlide? = nil
     /// What stops a swipe from starting, read only then: Chat's overlays, and a seal Home may still owe.
     @State private var swipeGuard: SwipeGuard = SwipeGuard()
     @State private var menuPulseToken: Int = 0
@@ -122,21 +123,25 @@ struct MainView: View {
     }
 
     /// The page between the pinned top bar and tab bar, with the edge zone along its leading side (over the
-    /// page, so a swipe from it never reaches the page's own swipe).
+    /// page, so a swipe from it never reaches the page's own swipe). Stacked rather than inset: the page area
+    /// touches neither safe-area edge, so a page's background and scroll views end at the bars instead of running
+    /// on under them, and the bars stay in front of nothing. Each bar's own backing reaches into its safe area.
+    /// The page sits in a `ZStack` of its own, so the spinner, the empty stage and a group's track replacing one
+    /// another (a crossfade) share the page area instead of being stacked in it, half height each.
     private func mainScreen(all: [GroupID: GroupSummary], metrics: StageMetrics, width: CGFloat, panel: CGFloat,
                             bottomInset: CGFloat, now: Date) -> some View {
-        page(all: all, metrics: metrics, width: width, panel: panel)
+        VStack(spacing: 0) {
+            topBar(all: all, metrics: metrics, now: now)
+            ZStack {
+                page(all: all, metrics: metrics, width: width, panel: panel)
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .leading) {
                 edgeZone(panel: panel)
             }
-            .background(Ink.bg.ignoresSafeArea())
-            .safeAreaInset(edge: .top, spacing: 0) {
-                topBar(all: all, metrics: metrics, now: now)
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                tabBar(all: all, bottomInset: bottomInset)
-            }
+            tabBar(all: all, bottomInset: bottomInset)
+        }
+        .background(Ink.bg.ignoresSafeArea())
     }
 
     private func topBar(all: [GroupID: GroupSummary], metrics: StageMetrics, now: Date) -> some View {
@@ -173,22 +178,24 @@ struct MainView: View {
         }
     }
 
-    /// The selected group's page, or the empty stage, or a spinner while the selected group (or a fresh
-    /// install's first sync) loads, so a new install that does have groups never flashes "Your first vow".
-    /// Only a group's page swipes (`SwipeablePage`). A swipe's hold limit applies only on Home while its orb
-    /// can still be held (`Digest.isOpen`): once you have checked in or been excused, on a finished vow or for a
-    /// non-member, there is no seal to wait for.
+    /// The selected group's pages on their track, or the empty stage, or a spinner while the selected group (or a
+    /// fresh install's first sync) loads, so a new install that does have groups never flashes "Your first vow".
+    /// Only a group's pages swipe. A swipe's hold limit applies only on Home while its orb can still be held
+    /// (`Digest.isOpen`): once you have checked in or been excused, on a finished vow or for a non-member, there is
+    /// no seal to wait for. Under Reduce Motion a swipe crossfades, so only then do the pages carry a transition;
+    /// otherwise a page comes and goes in place, off screen at the end of a swipe, as an instant swap on a tap.
     @ViewBuilder
     private func page(all: [GroupID: GroupSummary], metrics: StageMetrics, width: CGFloat, panel: CGFloat) -> some View {
         if let id: GroupID = shownID {
             let orbOpen: Bool = all[id].map { (s: GroupSummary) -> Bool in Digest.isOpen(s) } ?? false
-            SwipeablePage(width: width,
-                          hasNext: tab.next != nil,
-                          hasPrevious: tab.previous != nil,
-                          opensSidebar: tab == .home,
-                          holdLimit: tab == .home && orbOpen ? MainView.homeSwipeLimit : nil,
-                          hooks: swipeHooks(panel: panel)) {
-                tabPage(id, metrics: metrics, width: width)
+            PagerTrack(width: width,
+                       index: tab.rawValue,
+                       count: MainTab.allCases.count,
+                       sidebarIndex: MainTab.home.rawValue,
+                       holdLimit: orbOpen ? MainView.homeSwipeLimit : nil,
+                       swiping: paging,
+                       hooks: swipeHooks(id, panel: panel)) {
+                pages(id, metrics: metrics, width: width)
             }
             .id(id)
             .transition(.opacity)
@@ -203,35 +210,40 @@ struct MainView: View {
         }
     }
 
-    /// Pages are swapped, not kept alive: the orb, its timers and the calendar never run off screen. Two
-    /// are mounted only while a swipe's slide runs, and the one leaving is gone when it ends.
-    @ViewBuilder
-    private func tabPage(_ id: GroupID, metrics: StageMetrics, width: CGFloat) -> some View {
-        switch tab {
-        case .home:
-            sliding(StageScreen(id: id, roomDimmed: $roomDimmed, metrics: metrics, topToken: topToken,
-                                actions: stageActions(id)),
-                    width: width)
-        case .chat:
-            sliding(ChatPage(id: id, topToken: topToken, draft: chatDraft(id), covered: sidebarShown,
-                             actions: chatActions(id)),
-                    width: width)
-        case .streak:
-            sliding(StreakPage(id: id, metrics: metrics, topToken: topToken,
-                               onJoin: { presenter.present(.vow(id), from: .screen) }),
-                    width: width)
-        case .activity:
-            sliding(ActivityPage(id: id, topToken: topToken), width: width)
-        case .group:
-            sliding(GroupPage(id: id, topToken: topToken, actions: groupActions(id)), width: width)
+    /// The mounted pages, each at its place on the track. Keyed by tab, so a neighbour that becomes the selected
+    /// page stays the same view, its scroll position and state included.
+    private func pages(_ id: GroupID, metrics: StageMetrics, width: CGFloat) -> some View {
+        ForEach(mountedTabs) { (t: MainTab) in
+            tabPage(t, id: id, metrics: metrics)
+                .pagerSlot(t.rawValue, width: width)
+                .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.identity)
         }
     }
 
-    /// Each page carries the slide that takes it out or brings it in; `SwipeablePage` moves whichever is shown
-    /// while a finger does.
-    private func sliding<Page: View>(_ page: Page, width: CGFloat) -> some View {
-        page
-            .transition(pageTransition(width))
+    /// Pages are swapped, not kept alive: the orb, its timers and the calendar never run off screen. The selected
+    /// tab's page, and from when a swipe takes its touch until its track has landed, the neighbour on its side
+    /// (never under Reduce Motion, where nothing slides into view).
+    private var mountedTabs: [MainTab] {
+        guard !reduceMotion, case .page(let forward)? = pageSwipe,
+              let neighbour: MainTab = forward ? tab.next : tab.previous else { return [tab] }
+        return [tab, neighbour]
+    }
+
+    @ViewBuilder
+    private func tabPage(_ t: MainTab, id: GroupID, metrics: StageMetrics) -> some View {
+        switch t {
+        case .home:
+            StageScreen(id: id, roomDimmed: $roomDimmed, metrics: metrics, topToken: topToken, actions: stageActions(id))
+        case .chat:
+            ChatPage(id: id, topToken: topToken, draft: chatDraft(id), covered: sidebarShown, isCurrent: tab == .chat,
+                     actions: chatActions(id))
+        case .streak:
+            StreakPage(id: id, metrics: metrics, topToken: topToken, onJoin: { presenter.present(.vow(id), from: .screen) })
+        case .activity:
+            ActivityPage(id: id, topToken: topToken)
+        case .group:
+            GroupPage(id: id, topToken: topToken, actions: groupActions(id))
+        }
     }
 
     // MARK: - Sidebar
@@ -467,30 +479,46 @@ struct MainView: View {
 
     // MARK: - Swiping between tabs
 
-    /// What the page's swipe asks of the shell and tells it. A swipe starts only while ≡ could open the sidebar,
+    /// What group `id`'s track asks of the shell and tells it. A swipe starts only while ≡ could open the sidebar,
     /// with the sidebar closed and no swipe from the edge under way, nothing of Chat's up (a drag there is the
     /// overlay's or the cursor's, and standing the page down would take the keyboard away) and no seal owed on
-    /// Home. Nothing the swipe itself reports changes the answer, so the page's two reads of it agree. It stops
+    /// Home. Nothing the swipe itself reports changes the answer, so the track's two reads of it agree. It stops
     /// counting once the room dims or a presentation is coming, and a page swipe once the sidebar has opened
-    /// under it (≡ under a second finger).
-    private func swipeHooks(panel: CGFloat) -> SwipeHooks {
+    /// under it (≡ under a second finger) or the tab was chosen another way (`setTab` ended it). Let go far enough,
+    /// it lands on the neighbour on the same terms, an owed seal included (the tab bar's). A track whose group is no
+    /// longer shown (fading out after a switch) is heard no more, so it can't end or redirect the next group's
+    /// swipe.
+    private func swipeHooks(_ id: GroupID, panel: CGFloat) -> SwipeHooks {
         return SwipeHooks(
             canStart: { () -> Bool in
-                return canOpenSidebar && !sidebarOpen && edgeDrag == nil && !swipeGuard.overlay && !swipeGuard.owesSeal
+                return shownID == id && swipesAllowed && edgeDrag == nil && !swipeGuard.overlay
             },
             canContinue: { (toSidebar: Bool) -> Bool in
-                return canOpenSidebar && (toSidebar || !sidebarOpen)
+                return shownID == id && canOpenSidebar && (toSidebar || (!sidebarOpen && paging))
             },
-            changed: { (swipe: PageSwipe?) in pageSwipeChanged(swipe) },
-            commit: { (forward: Bool) in commitSwipe(forward: forward) },
+            changed: { (swipe: PageSwipe?) in
+                if shownID == id {
+                    pageSwipeChanged(swipe)
+                }
+            },
+            canLand: { () -> Bool in
+                return shownID == id && swipesAllowed
+            },
+            landed: { (from: Int, to: Int) in swipeLanded(in: id, from: from, to: to) },
             releaseToSidebar: { (value: DragGesture.Value) in openIfPassed(value, panel: panel) },
             heldLong: { swipeGuard.longDragEnded() }
         )
     }
 
-    /// Written only when it changes: the shell renders as a swipe takes its touch, turns around and ends, and on
-    /// every frame only while Home's swipe moves the panel. One toward the sidebar let go short springs back as
-    /// one from the edge does.
+    /// ≡ could open the sidebar, it is closed, and no seal is owed on Home: a swipe may start, or land on the
+    /// neighbour.
+    private var swipesAllowed: Bool {
+        canOpenSidebar && !sidebarOpen && !swipeGuard.owesSeal
+    }
+
+    /// Written only when it changes: the shell renders as a swipe takes its touch (to mount the neighbour), turns
+    /// round (the other neighbour) and lands, and on every frame only while Home's swipe moves the panel. One
+    /// toward the sidebar let go short springs back as one from the edge does.
     private func pageSwipeChanged(_ swipe: PageSwipe?) {
         guard swipe != pageSwipe else { return }
         if swipe == nil, case .sidebar? = pageSwipe {
@@ -502,25 +530,25 @@ struct MainView: View {
         pageSwipe = swipe
     }
 
-    /// The next page (`forward`) or the previous one slides in edge to edge with this one, from where the finger
-    /// left it: `SwipeablePage` springs its offset back as the slide runs. The tab bar's path, so the room's
-    /// dimming and an owed seal stop it too. Reduce Motion: a crossfade.
-    private func commitSwipe(forward: Bool) {
-        guard canOpenSidebar, !sidebarOpen, let target: MainTab = forward ? tab.next : tab.previous else { return }
-        let slide: PageSlide = PageSlide(forward: forward, startedAt: ProcessInfo.processInfo.systemUptime)
-        pageSlide = slide
-        withAnimation(reduceMotion ? Anim.fade : Anim.standard) {
-            selectTab(target)
-        } completion: {
-            if pageSlide == slide {
-                pageSlide = nil
-            }
-        }
+    /// Group `id`'s track has landed, from the tab at place `from` on the tab at `to` (the same one when it sprang
+    /// back): that tab is selected and the page the track left goes, in one update. Every page keeps its place in
+    /// the track, so the swap moves nothing on screen. Only for the swipe still under way: nothing if something
+    /// else ended it first (a tab chosen another way, another group shown).
+    private func swipeLanded(in id: GroupID, from: Int, to: Int) {
+        guard shownID == id, paging, tab.rawValue == from, let target: MainTab = MainTab(rawValue: to) else { return }
+        pageSwipe = nil
+        tab = target
     }
 
-    /// A swipe owns its touch: automatic presentations wait for it.
-    private var swipeOwnsTouch: Bool {
+    /// A swipe owns its touch or its track is still landing: automatic presentations wait for it.
+    private var swipeUnderWay: Bool {
         pageSwipe != nil
+    }
+
+    /// A swipe between pages (not Home's toward the sidebar) is under way, its landing included.
+    private var paging: Bool {
+        guard case .page? = pageSwipe else { return false }
+        return true
     }
 
     /// How far Home's swipe toward the sidebar has gone; nil while none is under way.
@@ -529,45 +557,30 @@ struct MainView: View {
         return travel
     }
 
-    /// While a swipe moves the page, and while the slide it started runs, the page leaving and the page
-    /// arriving move a width apart on the swipe's side. A page that leaves keeps the transition of its last
-    /// render, which the swipe's start (or its last turn) set; the one arriving takes the slide's. Otherwise
-    /// none: a tab-bar tap stays an instant swap.
-    private func pageTransition(_ width: CGFloat) -> AnyTransition {
-        if case .page(let forward)? = pageSwipe {
-            return MainView.slideTransition(forward: forward, width: width, reduceMotion: reduceMotion)
-        }
-        if let slide: PageSlide = pageSlide {
-            return MainView.slideTransition(forward: slide.forward, width: width, reduceMotion: reduceMotion)
-        }
-        return AnyTransition.identity
-    }
-
-    /// Forward (to the next tab), pages move toward the leading edge: the old one out by a width, the new one in
-    /// from a width away. Both ride on the swipe's offset as it springs back, so they meet where the finger
-    /// left the old one and stay edge to edge.
-    private static func slideTransition(forward: Bool, width: CGFloat, reduceMotion: Bool) -> AnyTransition {
-        if reduceMotion {
-            return AnyTransition.opacity
-        }
-        let shift: CGFloat = forward ? -width : width
-        return AnyTransition.asymmetric(insertion: AnyTransition.offset(x: -shift),
-                                        removal: AnyTransition.offset(x: shift))
-    }
-
     // MARK: - Tabs and selection
 
-    /// The tab bar, Home's links and a swipe. Ignored while the room is dimmed (from the hold's 200 ms gate to
-    /// the seal), and while a hold that completed under a long drag on Home, with the room lit, may still owe
-    /// its seal (`SwipeGuard.owesSeal`): the orb drops a completed seal that has not been delivered if it
-    /// leaves the screen. Re-tapping the selected tab scrolls its page to the top.
+    /// The tab bar and Home's links. Ignored while the room is dimmed (from the hold's 200 ms gate to the seal),
+    /// and while a hold that completed under a long drag on Home, with the room lit, may still owe its seal
+    /// (`SwipeGuard.owesSeal`): the orb drops a completed seal that has not been delivered if it leaves the
+    /// screen. Re-tapping the selected tab scrolls its page to the top; while a swipe is under way it keeps that
+    /// tab instead (the track stays where the tab is).
     private func selectTab(_ t: MainTab) {
         guard !roomDimmed, !swipeGuard.owesSeal else { return }
-        if t == tab {
+        if t == tab && !paging {
             topToken += 1
         } else {
-            tab = t
+            setTab(t)
         }
+    }
+
+    /// Every way the tab changes but a swipe's own landing, which is always an instant swap: a swipe still under
+    /// way, its landing included, leads nowhere now, so its neighbour goes at once and the track drops it
+    /// (`PagerTrack.swiping`).
+    private func setTab(_ t: MainTab) {
+        if paging {
+            pageSwipe = nil
+        }
+        tab = t
     }
 
     /// Switching group resets the tab to Home: a switch is almost always to keep that vow.
@@ -576,17 +589,18 @@ struct MainView: View {
         if selected != id {
             withAnimation(reduceMotion ? nil : Anim.switchVow) {
                 selected = id
-                tab = .home
+                setTab(.home)
             }
         }
         prefs.saveLastVowZone(id.zoneName)
     }
 
-    /// That group's Home, also when it is already selected (a reminder, the vow prompt, an invite).
+    /// That group's Home, also when it is already selected (a reminder, the vow prompt, an invite), and also when a
+    /// swipe away from Home is still under way or landing: it ends there.
     private func showHome(_ id: GroupID) {
         select(id)
-        if selected == id && tab != .home {
-            tab = .home
+        if selected == id && (tab != .home || paging) {
+            setTab(.home)
         }
     }
 
@@ -965,7 +979,7 @@ struct MainView: View {
     /// What the presenter and RootView need to know about the shell, and what waited for Home.
     private var shellHooks: some View {
         appearanceHooks
-            .onChange(of: stageBusy || sidebarOpen || edgeDrag != nil || swipeOwnsTouch, initial: true) { (_: Bool, busy: Bool) in
+            .onChange(of: stageBusy || sidebarOpen || edgeDrag != nil || swipeUnderWay, initial: true) { (_: Bool, busy: Bool) in
                 presenter.setBusy(busy)
             }
             .onChange(of: sidebarShown || !presenter.isIdle, initial: true) { (_: Bool, blocked: Bool) in
@@ -982,6 +996,11 @@ struct MainView: View {
                 if old.isChat {
                     swipeGuard.overlay = false
                 }
+            }
+            .onChange(of: shownID) {
+                // The shown group changed or went (a refresh can take it mid-swipe): no swipe of its old track can
+                // still be under way, and its own `changed(nil)` is scoped to that group, so it never arrives.
+                pageSwipeChanged(nil)
             }
             .onChange(of: stageBusy) { (_: Bool, busy: Bool) in
                 if !busy {
@@ -1188,8 +1207,9 @@ private struct RefreshKey: Equatable {
     let isChat: Bool
 }
 
-/// How a drag on the sidebar, its edge or the page was classified: horizontal only when clearly wider than tall.
-private enum DragAxis {
+/// How a drag on the sidebar, its edge or a page (`PagerTrack`) was classified: horizontal only when clearly wider
+/// than tall, so a pull to refresh (`PageScroll`), which takes only drags at least as tall as wide, never shares one.
+enum DragAxis {
     case horizontal
     case vertical
 
@@ -1220,261 +1240,6 @@ private struct ShellDrag: Equatable {
 }
 
 // MARK: - Swiping between tabs
-
-/// The selected group's page as one swipe surface, alongside the page's own gestures, so its scroll views, the
-/// orb's hold and Chat's long presses keep theirs: a drag is decided on its first change, and only a clearly
-/// horizontal one that the shell lets start is a swipe. It holds the live drag itself, so the page follows the
-/// finger and stands down without the shell rendering, or the page's body (and its Settlement pass) running
-/// again: the shell hears only of a swipe taking its touch, turning round and ending, and of every frame of
-/// Home's swipe to the right, which moves the sidebar instead of the page.
-///
-/// While a swipe owns its touch the page is disabled, so a finger let go over a button (a vote, a member row,
-/// Next day) doesn't press it too, and a hold the swipe began on the orb lets go. A drag that isn't a swipe
-/// (a scroll, or a swipe that couldn't start) leaves the page alone, Chat's keyboard included. The follow
-/// springs back as the drag ends, under the slide when it was let go far enough.
-private struct SwipeablePage<Content: View>: View {
-    let width: CGFloat
-    let hasNext: Bool
-    let hasPrevious: Bool
-    /// Home: a swipe to the right brings the sidebar out, as one from the edge does.
-    let opensSidebar: Bool
-    /// Home: how long a drag may last and still change the page (`MainView.homeSwipeLimit`); one that lasts
-    /// longer may also leave a seal owed (`SwipeHooks.heldLong`).
-    let holdLimit: TimeInterval?
-    let hooks: SwipeHooks
-    let content: Content
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
-    /// What draws: gesture state, so a drag the system cancels resets itself, and the follow springs back.
-    @GestureState(resetTransaction: Transaction(animation: Anim.standard))
-    private var drag: PageDrag? = nil
-    /// The same drag for its release and for what the shell hears (gesture state has reset by then). Cleared
-    /// as it ends, and when the drag goes without an end of its own.
-    @State private var latch: SwipeLatch? = nil
-
-    init(width: CGFloat,
-         hasNext: Bool,
-         hasPrevious: Bool,
-         opensSidebar: Bool,
-         holdLimit: TimeInterval?,
-         hooks: SwipeHooks,
-         @ViewBuilder content: () -> Content) {
-        self.width = width
-        self.hasNext = hasNext
-        self.hasPrevious = hasPrevious
-        self.opensSidebar = opensSidebar
-        self.holdLimit = holdLimit
-        self.hooks = hooks
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .offset(x: offset)
-            .disabled(drag?.owns == true)
-            .simultaneousGesture(gesture)
-            .onChange(of: drag == nil) { (_: Bool, idle: Bool) in
-                if idle {
-                    dropLatch()
-                }
-            }
-            .onDisappear {
-                dropLatch()
-            }
-    }
-
-    /// The page follows a swipe with resistance, and barely toward no page at all (a rubber band). It stays
-    /// still under Reduce Motion, and for a swipe toward the sidebar, which moves the panel instead.
-    private var offset: CGFloat {
-        guard !reduceMotion, let live: PageDrag = drag, live.owns, !live.toSidebar else { return 0 }
-        let hasNeighbour: Bool = live.dx < 0 ? hasNext : hasPrevious
-        let limit: CGFloat = width * (hasNeighbour ? SwipeMetrics.followShare : SwipeMetrics.bandShare)
-        return SwipeMetrics.resisted(live.dx, limit: limit)
-    }
-
-    private var gesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .global)
-            .updating($drag) { (value: DragGesture.Value, state: inout PageDrag?, transaction: inout Transaction) in
-                let next: PageDrag = tracked(state, value: value)
-                if state?.owns == true && !next.owns {
-                    transaction.animation = Anim.standard
-                }
-                if next != state {
-                    state = next
-                }
-            }
-            .onChanged { (value: DragGesture.Value) in
-                dragChanged(value)
-            }
-            .onEnded { (value: DragGesture.Value) in
-                dragEnded(value)
-            }
-    }
-
-    // MARK: - Deciding
-
-    /// A drag's first change decides it for good: a swipe when clearly horizontal and the shell lets one start;
-    /// to the right on Home, one toward the sidebar.
-    private func start(_ translation: CGSize) -> (toSidebar: Bool, owns: Bool) {
-        return (toSidebar: opensSidebar && translation.width > 0,
-                owns: DragAxis.of(translation) == .horizontal && hooks.canStart())
-    }
-
-    /// The live drag after `value`: what its first change found, then its travel while it still counts. A swipe
-    /// toward the sidebar keeps no travel here, and a scroll is the same value throughout, so neither writes on
-    /// every frame.
-    private func tracked(_ previous: PageDrag?, value: DragGesture.Value) -> PageDrag {
-        guard let live: PageDrag = previous else {
-            let first: (toSidebar: Bool, owns: Bool) = start(value.translation)
-            return PageDrag(owns: first.owns,
-                            toSidebar: first.toSidebar,
-                            dx: first.owns && !first.toSidebar ? value.translation.width : 0)
-        }
-        guard live.owns else { return live }
-        guard hooks.canContinue(live.toSidebar) else {
-            return PageDrag(owns: false, toSidebar: live.toSidebar, dx: 0)
-        }
-        return PageDrag(owns: true, toSidebar: live.toSidebar, dx: live.toSidebar ? 0 : value.translation.width)
-    }
-
-    /// Mirrors `tracked` for the release, and tells the shell when a swipe takes its touch, turns round or stops
-    /// counting; Home's swipe toward the sidebar, on every change.
-    private func dragChanged(_ value: DragGesture.Value) {
-        let travel: CGFloat = value.translation.width
-        guard var current: SwipeLatch = latch else {
-            let first: (toSidebar: Bool, owns: Bool) = start(value.translation)
-            latch = SwipeLatch(began: value.time, toSidebar: first.toSidebar, forward: travel < 0, blocked: !first.owns)
-            if first.owns {
-                hooks.changed(first.toSidebar ? PageSwipe.sidebar(travel: travel) : PageSwipe.page(forward: travel < 0))
-            }
-            return
-        }
-        guard !current.blocked else { return }
-        if !hooks.canContinue(current.toSidebar) {
-            current.blocked = true
-            latch = current
-            hooks.changed(nil)
-        } else if current.toSidebar {
-            hooks.changed(PageSwipe.sidebar(travel: travel))
-        } else if travel != 0 && (travel < 0) != current.forward {
-            current.forward = travel < 0
-            latch = current
-            hooks.changed(PageSwipe.page(forward: current.forward))
-        }
-    }
-
-    /// Let go: Home's swipe to the right opens the sidebar if it went far enough; any other moves to the
-    /// neighbouring page once it has gone far enough. A drag on Home that lasted `holdLimit`, a swipe or not,
-    /// tells the shell first.
-    private func dragEnded(_ value: DragGesture.Value) {
-        guard let current: SwipeLatch = latch else { return }
-        latch = nil
-        let held: TimeInterval = value.time.timeIntervalSince(current.began)
-        if let limit: TimeInterval = holdLimit, held >= limit {
-            hooks.heldLong()
-        }
-        guard !current.blocked else { return }
-        if current.toSidebar {
-            hooks.releaseToSidebar(value)
-        } else if let forward: Bool = target(value, swipe: current, held: held) {
-            hooks.commit(forward)
-        }
-        hooks.changed(nil)
-    }
-
-    /// Forward (the next page) or back, once the swipe would carry the page past a third of the width: a slow
-    /// one by how far it went, a fling by where it would end, so one flung back stays. nil toward no page,
-    /// against the way the slide is set to go, and once it has lasted `holdLimit` (the orb's hold under it).
-    private func target(_ value: DragGesture.Value, swipe: SwipeLatch, held: TimeInterval) -> Bool? {
-        let travel: CGFloat = value.translation.width
-        guard travel != 0, (travel < 0) == swipe.forward, swipe.forward ? hasNext : hasPrevious else { return nil }
-        let predicted: CGFloat = swipe.forward ? -value.predictedEndTranslation.width : value.predictedEndTranslation.width
-        guard predicted > width / 3 else { return nil }
-        if let limit: TimeInterval = holdLimit, held >= limit {
-            return nil
-        }
-        return swipe.forward
-    }
-
-    /// The drag went without an end of its own (the system took the touch), or the page left mid-drag: the
-    /// shell keeps nothing of it.
-    private func dropLatch() {
-        guard let current: SwipeLatch = latch else { return }
-        latch = nil
-        if !current.blocked {
-            hooks.changed(nil)
-        }
-    }
-}
-
-/// What the page's swipe asks of the shell, and tells it.
-private struct SwipeHooks {
-    /// On a drag's first change: may a swipe start now?
-    let canStart: () -> Bool
-    /// On every later change: does it still count? true: Home's swipe toward the sidebar.
-    let canContinue: (Bool) -> Bool
-    /// A swipe took its touch, turned round or moved the sidebar; nil once it has let go or stopped counting.
-    let changed: (PageSwipe?) -> Void
-    /// Let go far enough: the next page (true) or the previous one.
-    let commit: (Bool) -> Void
-    /// Home's swipe toward the sidebar let go: the panel opens if it went far enough.
-    let releaseToSidebar: (DragGesture.Value) -> Void
-    /// A drag on Home lasted the hold limit: a hold under it may still owe its seal.
-    let heldLong: () -> Void
-}
-
-/// A swipe that owns its touch, as the shell needs it.
-private enum PageSwipe: Equatable {
-    /// Toward the next page (`forward`) or the previous one: the way the slide will go.
-    case page(forward: Bool)
-    /// Home's swipe to the right, and how far it has gone: the sidebar follows it.
-    case sidebar(travel: CGFloat)
-}
-
-/// A live drag on the page, as its first change found it: whether it is a swipe that owns the touch (false for a
-/// scroll, or a swipe that couldn't start or stopped counting), whether it is Home's swipe toward the sidebar,
-/// and the travel the page follows.
-private struct PageDrag: Equatable {
-    let owns: Bool
-    let toSidebar: Bool
-    let dx: CGFloat
-}
-
-/// A page drag for its release.
-private struct SwipeLatch {
-    /// When the first change came: a hold on the orb under the drag began shortly before it.
-    let began: Date
-    /// To the right on Home: it brings the sidebar out rather than moving the page.
-    let toSidebar: Bool
-    /// Toward the next page: the way the finger last went, and the slide the shell has set up.
-    var forward: Bool
-    /// Not a swipe (vertical, or begun while one couldn't start), or one that stopped counting.
-    var blocked: Bool
-}
-
-/// How the page follows a swipe.
-private enum SwipeMetrics {
-    /// How far the page can follow toward a neighbouring tab, and toward no tab at all (the rubber band at the
-    /// first and last), as shares of the screen's width.
-    static let followShare: CGFloat = 0.4
-    static let bandShare: CGFloat = 0.1
-    /// The rubber band's stiffness, as in a scroll view: 100 pt of travel moves the page about 40 pt.
-    static let resistance: CGFloat = 0.55
-
-    /// Nears `limit` without reaching it, like a scroll view's rubber band.
-    static func resisted(_ travel: CGFloat, limit: CGFloat) -> CGFloat {
-        guard limit > 0 else { return 0 }
-        let eased: CGFloat = limit * (1 - 1 / (abs(travel) * SwipeMetrics.resistance / limit + 1))
-        return travel < 0 ? -eased : eased
-    }
-}
-
-/// The slide a released swipe started: which way the pages move.
-private struct PageSlide: Equatable {
-    let forward: Bool
-    /// Tells one slide from the next, so a slide that ends late can't clear the one after it.
-    let startedAt: TimeInterval
-}
 
 /// What stops a swipe from starting, read only then. A reference, so neither Chat's overlays coming and going
 /// nor a long drag on Home renders the shell.

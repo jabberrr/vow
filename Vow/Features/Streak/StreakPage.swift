@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The Streak tab: your streak and when it began, the next milestone and your best, then a month
 /// calendar of your vow days. Reads the store live on a per-minute clock, so today's ring and the day
-/// rolling over stay on time. No horizontal gestures anywhere, so a vertical scroll always works.
+/// rolling over stay on time. Holds still when it fits, but for a pull to refresh (`PageScroll`). No
+/// horizontal gestures anywhere, so a vertical drag always scrolls or pulls.
 struct StreakPage: View {
     let id: GroupID
     let metrics: StageMetrics
@@ -18,10 +19,11 @@ struct StreakPage: View {
         self.onJoin = onJoin
     }
 
-    private static let topID: String = "streak-top"
     private static let pageTop: CGFloat = 18
     private static let sinceTop: CGFloat = 6
     private static let cardTop: CGFloat = 22
+    /// Below the calendar: empty margin, so the page may lose it under the tab bar and still hold still.
+    private static let bottomMargin: CGFloat = Gap.xxl
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -44,22 +46,11 @@ struct StreakPage: View {
     }
 
     private func page(group: GroupInfo, summary: GroupSummary, now: Date) -> some View {
-        ScrollViewReader { (proxy: ScrollViewProxy) in
-            ScrollView(.vertical, showsIndicators: false) {
-                column(group: group, summary: summary, now: now)
-                    .padding(.horizontal, Gap.gutter)
-                    .padding(.top, StreakPage.pageTop)
-                    .padding(.bottom, Gap.xxl)
-                    .id(StreakPage.topID)
-            }
-            .refreshable {
-                await store.refreshAll()
-            }
-            .onChange(of: topToken) { _, _ in
-                withAnimation(Anim.standard) {
-                    proxy.scrollTo(StreakPage.topID, anchor: .top)
-                }
-            }
+        PageScroll(topToken: topToken, slack: StreakPage.bottomMargin, onRefresh: { await store.refreshAll() }) {
+            column(group: group, summary: summary, now: now)
+                .padding(.horizontal, Gap.gutter)
+                .padding(.top, StreakPage.pageTop)
+                .padding(.bottom, StreakPage.bottomMargin)
         }
     }
 
