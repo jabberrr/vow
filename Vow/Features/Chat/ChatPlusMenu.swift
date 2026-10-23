@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The composer's "+" card: proof for your claim, from the camera or the library, and an excuse for today.
 /// A custom card, not a SwiftUI `Menu`, because each row leads to a sheet or a cover and a disabled row says
-/// why in place. There is no plain photo row: in this chat a photo is always proof. VoiceOver is held inside
-/// it and starts on the first row it can use; escape closes it.
+/// why in place. There is no plain photo row: in this chat a photo is always proof. It takes its own height,
+/// and scrolls only when the page can't hold it (large text on a small screen). VoiceOver is held inside it
+/// and starts on the first row it can use; escape closes it.
 struct ChatPlusMenu: View {
     /// What proof sent now attaches to, or why there is none: "Proof for today's check-in".
     let header: String
@@ -48,6 +49,28 @@ struct ChatPlusMenu: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            rows
+            ScrollView(.vertical, showsIndicators: false) {
+                rows
+            }
+        }
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: Corner.field, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Corner.field, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .background(shadow)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape, onClose)
+        .onAppear {
+            focused = firstEnabled
+        }
+    }
+
+    private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(header)
                 .font(Fonts.footnote)
@@ -65,19 +88,6 @@ struct ChatPlusMenu: View {
             Hairline(leading: Gap.m + ChatPlusMenu.symbolWidth + Gap.m)
             row(.excuse, symbol: "hand.raised", title: "Excuse for today", note: excuseNote, reason: excuseNote,
                 action: onExcuse)
-        }
-        .background(card)
-        .clipShape(RoundedRectangle(cornerRadius: Corner.field, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Corner.field, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        )
-        .background(shadow)
-        .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(.isModal)
-        .accessibilityAction(.escape, onClose)
-        .onAppear {
-            focused = firstEnabled
         }
     }
 

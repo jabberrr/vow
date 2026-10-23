@@ -217,7 +217,7 @@ final class StreakCalendarTests: XCTestCase {
                                                 net: 0, streak: 0, bestStreak: 0, history: [],
                                                 checkedInToday: false, missedYesterday: false)
         let summary: GroupSummary = GroupSummary(currentDay: 40_000, cycle: 1_334, dayInCycle: 11, glyphNumber: 40_001,
-                                                 pot: 0, totalForfeited: 0, standings: [me], ledger: [], viewer: me)
+                                                 pot: 0, totalForfeited: 0, standings: [me], days: [], viewer: me)
         let span: CalendarSpan = try XCTUnwrap(CalendarSpan(group: group, summary: summary, standing: me,
                                                             calendar: calendar(firstWeekday: 1), now: anyNow))
         XCTAssertEqual(span.count, StreakCalendar.maxMonths)

@@ -88,14 +88,22 @@ final class ReviewTests: XCTestCase {
     // MARK: - Thresholds
 
     func testNeededPerRule() {
+        // Index n - 1 for n = 1...5 eligible voters.
         let expected: [VoteRule: [Int]] = [
             .majority: [1, 2, 2, 3, 3],
             .twoThirds: [1, 2, 2, 3, 4],
-            .everyone: [1, 2, 3, 4, 5]
+            .everyone: [1, 2, 3, 4, 5],
+            .count(1): [1, 1, 1, 1, 1],
+            .count(3): [1, 2, 3, 3, 3],
+            .count(99): [1, 2, 3, 4, 5],
+            // Counts outside 1...99 judge as the nearest count inside it.
+            .count(0): [1, 1, 1, 1, 1],
+            .count(-4): [1, 1, 1, 1, 1],
+            .count(150): [1, 2, 3, 4, 5]
         ]
-        for rule in VoteRule.allCases {
+        for (rule, column) in expected {
             for n in 1...5 {
-                XCTAssertEqual(rule.needed(voters: n), expected[rule]?[n - 1], "\(rule) n=\(n)")
+                XCTAssertEqual(rule.needed(voters: n), column[n - 1], "\(rule) n=\(n)")
             }
         }
     }
@@ -105,9 +113,11 @@ final class ReviewTests: XCTestCase {
         let needed: [VoteRule: [Int]] = [
             .majority: [0, 1, 2, 2, 3, 3],
             .twoThirds: [0, 1, 2, 2, 3, 4],
-            .everyone: [0, 1, 2, 3, 4, 5]
+            .everyone: [0, 1, 2, 3, 4, 5],
+            .count(2): [0, 1, 2, 2, 2, 2],
+            .count(4): [0, 1, 2, 3, 4, 4]
         ]
-        for rule in VoteRule.allCases {
+        for rule in needed.keys {
             let group: GroupInfo = makeGroup(testDay: 1, rules: [VoteRuleChange(fromDay: 0, rule: rule)])
             for n in 0...5 {
                 var members: [MemberInfo] = [member("maya", "Maya")]
@@ -524,7 +534,7 @@ final class ReviewTests: XCTestCase {
                                                                 checkIns: checkIns, votes: votes),
                                                        viewerID: "me", now: anyNow)
         // Days 0...2, the day of the change included, settle exactly as before.
-        XCTAssertEqual(after.ledger, before.ledger)
+        XCTAssertEqual(after.days, before.days)
         XCTAssertEqual(after.totalForfeited, before.totalForfeited, accuracy: 1e-9)
         let maya: MemberStanding? = after.standings.first { (s: MemberStanding) -> Bool in s.userID == "maya" }
         XCTAssertEqual(maya?.history ?? [], [DayOutcome.kept, DayOutcome.missed, DayOutcome.missed])
@@ -550,6 +560,78 @@ final class ReviewTests: XCTestCase {
         XCTAssertEqual(rules.count, Review.ruleLogCap)
         XCTAssertEqual(rules.first, VoteRuleChange(fromDay: 7, rule: .twoThirds))
         XCTAssertEqual(rules.last, VoteRuleChange(fromDay: 70, rule: .majority))
+    }
+
+    func testChangingToACustomRule() {
+        let today: GroupInfo = makeGroup(testDay: 2)
+        XCTAssertEqual(Review.changing(today, to: .count(2), now: anyNow), [VoteRuleChange(fromDay: 3, rule: .count(2))])
+
+        // Another count replaces tomorrow's; the same count changes nothing.
+        let planned: GroupInfo = makeGroup(testDay: 2, rules: [VoteRuleChange(fromDay: 3, rule: .count(2))])
+        XCTAssertEqual(Review.changing(planned, to: .count(3), now: anyNow), [VoteRuleChange(fromDay: 3, rule: .count(3))])
+        XCTAssertEqual(Review.changing(planned, to: .count(2), now: anyNow), [VoteRuleChange(fromDay: 3, rule: .count(2))])
+        XCTAssertEqual(Review.changing(planned, to: .majority, now: anyNow), [])
+
+        let later: GroupInfo = makeGroup(testDay: 5, rules: [VoteRuleChange(fromDay: 3, rule: .count(2))])
+        XCTAssertEqual(Review.changing(later, to: .count(2), now: anyNow), [VoteRuleChange(fromDay: 3, rule: .count(2))])
+        XCTAssertEqual(Review.changing(later, to: .count(1), now: anyNow),
+                       [VoteRuleChange(fromDay: 3, rule: .count(2)), VoteRuleChange(fromDay: 6, rule: .count(1))])
+        XCTAssertEqual(Review.rule(forDay: 4, group: later), .count(2))
+    }
+
+    // MARK: - Rule codes
+
+    func testRuleCodesRoundTrip() {
+        let codes: [(rule: VoteRule, code: Int)] = [
+            (rule: .majority, code: 1),
+            (rule: .twoThirds, code: 2),
+            (rule: .everyone, code: 3),
+            (rule: .count(1), code: 101),
+            (rule: .count(2), code: 102),
+            (rule: .count(99), code: 199)
+        ]
+        for item in codes {
+            XCTAssertEqual(item.rule.code, item.code, "\(item.rule)")
+            XCTAssertEqual(VoteRule(code: item.code), item.rule, "\(item.code)")
+        }
+        // A count outside 1...99 stores as the count it judges by.
+        XCTAssertEqual(VoteRule.count(0).code, 101)
+        XCTAssertEqual(VoteRule.count(150).code, 199)
+    }
+
+    func testUnknownRuleCodesAreRejected() {
+        for code in [0, 4, 99, 100, 200, -1, -99, Int.min, Int.max] {
+            XCTAssertNil(VoteRule(code: code), "\(code)")
+        }
+    }
+
+    func testRulesEncodeAsOneInt() throws {
+        let log: [VoteRuleChange] = [VoteRuleChange(fromDay: 1, rule: .twoThirds), VoteRuleChange(fromDay: 4, rule: .count(7))]
+        let data: Data = try JSONEncoder().encode(log)
+        XCTAssertEqual(try JSONDecoder().decode([VoteRuleChange].self, from: data), log)
+
+        let encoder: JSONEncoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let one: Data = try encoder.encode(VoteRuleChange(fromDay: 4, rule: .count(7)))
+        XCTAssertEqual(String(decoding: one, as: UTF8.self), "{\"fromDay\":4,\"rule\":107}")
+    }
+
+    func testRuleLogCachedBeforeCustomStillDecodes() throws {
+        // A cache written before Custom stored the rule as its raw value: 1, 2 or 3.
+        let old: Data = Data("[{\"fromDay\":0,\"rule\":1},{\"fromDay\":1,\"rule\":2},{\"fromDay\":5,\"rule\":3}]".utf8)
+        XCTAssertEqual(try JSONDecoder().decode([VoteRuleChange].self, from: old),
+                       [VoteRuleChange(fromDay: 0, rule: .majority), VoteRuleChange(fromDay: 1, rule: .twoThirds),
+                        VoteRuleChange(fromDay: 5, rule: .everyone)])
+
+        // A code this build doesn't know is corrupt data, as an unknown raw value was.
+        let unknown: Data = Data("{\"fromDay\":1,\"rule\":4}".utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(VoteRuleChange.self, from: unknown)) { (error: Error) -> Void in
+            var corrupted: Bool = false
+            if let decoding: DecodingError = error as? DecodingError, case .dataCorrupted = decoding {
+                corrupted = true
+            }
+            XCTAssertTrue(corrupted, "\(error)")
+        }
     }
 
     // MARK: - Persistence
@@ -593,49 +675,23 @@ final class ReviewTests: XCTestCase {
         XCTAssertEqual(old.excuses, [])
         XCTAssertEqual(old.votes, [])
         XCTAssertEqual(old.posts, [])
+        XCTAssertEqual(old.reactions, [])
     }
 
     func testSnapshotRoundTripsChat() throws {
-        // Dates on Jan 1 in New York: 10:06 (excuse), 10:23 (vote), 12:53 (post).
+        // Dates on Jan 1 in New York: 10:06 (excuse), 10:23 (vote), 12:53 (post), 13:10 (reaction).
         let post: PostInfo = PostInfo(id: "post-1", authorID: "maya", text: "Done", day: 1, epoch: 0, isProof: true,
                                       media: .video, aspect: 0.5625, duration: 12.5, serverDate: date(1_767_290_000))
-        let snap: GroupSnapshot = snapshot(makeGroup(rules: [VoteRuleChange(fromDay: 3, rule: .twoThirds)]), trio,
+        let rules: [VoteRuleChange] = [VoteRuleChange(fromDay: 3, rule: .twoThirds), VoteRuleChange(fromDay: 5, rule: .count(3))]
+        let snap: GroupSnapshot = snapshot(makeGroup(rules: rules), trio,
                                            checkIns: [checkIn("maya", 1)],
                                            excuses: [excuse("me", 1, "Flu", at: 1_767_280_000)],
                                            votes: [vote("theo", "me", 1, counts: true, at: 1_767_281_000)])
         var withPost: GroupSnapshot = snap
         withPost.posts = [post]
+        withPost.reactions = [ReactionInfo(userID: "me", postID: "post-1", emoji: "🔥", serverDate: date(1_767_291_000)),
+                              ReactionInfo(userID: "theo", postID: "post-1", emoji: "", serverDate: nil)]
         let data: Data = try JSONEncoder().encode(withPost)
         XCTAssertEqual(try JSONDecoder().decode(GroupSnapshot.self, from: data), withPost)
-    }
-
-    // MARK: - Activity
-
-    func testActivityReadsReviewLines() throws {
-        // You sit out, Maya's check-in is overruled (two of three), Theo keeps, Zed sits out too.
-        let members: [MemberInfo] = trio + [member("zed", "Zed")]
-        let snap: GroupSnapshot = snapshot(makeGroup(testDay: 1), members,
-                                           checkIns: [checkIn("maya", 0), checkIn("theo", 0)],
-                                           excuses: [excuse("me", 0), excuse("zed", 0)],
-                                           votes: [vote("me", "maya", 0), vote("theo", "maya", 0)])
-        let summary: GroupSummary = Settlement.summarize(snap, viewerID: "me", now: anyNow)
-        let ranked: [LedgerLine] = LedgerFormat.ranked(summary.ledger)
-        let bodies: [String] = ranked.map { (line: LedgerLine) -> String in LedgerFormat.body(line) }
-        XCTAssertEqual(Array(bodies.prefix(4)), ["You were excused", "Pot split 1 way", "Maya's check-in was overruled",
-                                                 "Zed was excused"])
-        XCTAssertNil(LedgerFormat.trailing(ranked[0]))
-        XCTAssertEqual(LedgerFormat.trailing(ranked[2]), "\u{2212}2 pts")
-        XCTAssertEqual(LedgerFormat.symbol(.excused), "pause.circle")
-        XCTAssertFalse(LedgerFormat.isOwn(.excused))
-
-        let hers: GroupSummary = Settlement.summarize(snap, viewerID: "maya", now: anyNow)
-        let own: LedgerLine = try XCTUnwrap(hers.ledger.first { (line: LedgerLine) -> Bool in line.kind == .missed })
-        XCTAssertEqual(LedgerFormat.body(own), "Your check-in was overruled")
-        XCTAssertEqual(LedgerFormat.trailing(own), "\u{2212}2 pts")
-        XCTAssertEqual(LedgerFormat.spoken(own), "Your check-in was overruled, minus 2 points")
-
-        let plain: LedgerLine = LedgerLine(id: "d0-missed-me", day: 0, kind: .missed,
-                                           text: "Day 1 · You missed · \u{2212}2 pts", amount: -2)
-        XCTAssertEqual(LedgerFormat.body(plain), "You missed")
     }
 }

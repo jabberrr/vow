@@ -147,23 +147,26 @@ enum MilestoneText {
 
 /// The group's vote rule in words: Group's row and sheet, and Chat's preamble.
 enum VoteRuleText {
-    /// "More than half", "Two thirds", "Everyone".
+    /// "More than half", "Two thirds", "Everyone", "1 vote", "2 votes".
     static func title(_ rule: VoteRule) -> String {
         switch rule {
         case .majority: return "More than half"
         case .twoThirds: return "Two thirds"
         case .everyone: return "Everyone"
+        case .count(let k): return k == 1 ? "1 vote" : "\(k) votes"
         }
     }
 
     /// "Check-ins and excuses count unless more than half of the others say they don't, by the end of the
-    /// next day." "Everyone" reads "unless everyone else says they don't".
+    /// next day." "Everyone" reads "unless everyone else says they don't", "1 vote" "unless one of the
+    /// others says they don't" and "2 votes" "unless 2 of the others say they don't".
     static func summary(_ rule: VoteRule) -> String {
         let who: String
         switch rule {
         case .majority: who = "more than half of the others say"
         case .twoThirds: who = "two thirds of the others say"
         case .everyone: who = "everyone else says"
+        case .count(let k): who = k == 1 ? "one of the others says" : "\(k) of the others say"
         }
         return "Check-ins and excuses count unless \(who) they don't, by the end of the next day."
     }

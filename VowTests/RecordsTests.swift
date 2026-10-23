@@ -2,8 +2,8 @@ import CloudKit
 import XCTest
 @testable import Vow
 
-/// Record mapping for the chat types and the vote rule log. Records are built locally and never saved, so no
-/// container is touched (and an unsaved record has no creationDate or modificationDate).
+/// Record mapping for the chat types, reactions and the vote rule log. Records are built locally and never saved, so
+/// no container is touched (and an unsaved record has no creationDate or modificationDate).
 final class RecordsTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -204,6 +204,51 @@ final class RecordsTests: XCTestCase {
         XCTAssertTrue(textOnly.changedKeys().isEmpty)
     }
 
+    // MARK: - Reaction
+
+    func testReactionRecordNameAndRoundTrip() {
+        let reaction: ReactionInfo = ReactionInfo(userID: "ari", postID: "post-1F2E", emoji: "🔥", serverDate: nil)
+        let recordID: CKRecord.ID = Records.reactionRecordID(reaction, in: id)
+        XCTAssertEqual(recordID.recordName, "reaction-ari-post-1F2E")
+        XCTAssertEqual(recordID.zoneID.zoneName, "group-chat")
+
+        let r: CKRecord = CKRecord(recordType: Records.reactionType, recordID: recordID)
+        Records.apply(reaction, to: r)
+        XCTAssertEqual(Records.string(r, "emoji"), "🔥")
+        XCTAssertEqual(Records.reactionInfo(from: r), reaction)
+
+        // Taking it back overwrites the record with "", which the same record name finds.
+        var takenBack: ReactionInfo = reaction
+        takenBack.emoji = ""
+        XCTAssertEqual(Records.reactionRecordID(takenBack, in: id), recordID)
+        Records.apply(takenBack, to: r)
+        XCTAssertEqual(Records.reactionInfo(from: r), takenBack)
+    }
+
+    func testReactionDecodingIsLenient() {
+        let r: CKRecord = record(Records.reactionType, "reaction-ari-post-1")
+        r["userID"] = "ari" as CKRecordValue
+        XCTAssertNil(Records.reactionInfo(from: r))
+        r["postID"] = "" as CKRecordValue
+        XCTAssertNil(Records.reactionInfo(from: r))
+        r["postID"] = "post-1" as CKRecordValue
+
+        let bare: ReactionInfo? = Records.reactionInfo(from: r)
+        XCTAssertEqual(bare?.emoji, "")
+        XCTAssertNil(bare?.serverDate)
+
+        // A family emoji is one character, and a long string is cut to the limit on read and on write.
+        r["emoji"] = "👨‍👩‍👧‍👦" as CKRecordValue
+        XCTAssertEqual(Records.reactionInfo(from: r)?.emoji, "👨‍👩‍👧‍👦")
+        r["emoji"] = String(repeating: "👍", count: 40) as CKRecordValue
+        XCTAssertEqual(Records.reactionInfo(from: r)?.emoji.count, Records.emojiLimit)
+
+        let long: ReactionInfo = ReactionInfo(userID: "ari", postID: "post-1", emoji: String(repeating: "❤️", count: 30),
+                                              serverDate: nil)
+        Records.apply(long, to: r)
+        XCTAssertEqual(Records.string(r, "emoji")?.count, Records.emojiLimit)
+    }
+
     // MARK: - Vote rules on the Group record
 
     func testVoteRulesRoundTripAsAFlatList() {
@@ -223,6 +268,17 @@ final class RecordsTests: XCTestCase {
         XCTAssertNil(Records.voteRules(r))
     }
 
+    func testCustomVoteRulesRoundTripAsCodesFromOneHundred() {
+        let rules: [VoteRuleChange] = [VoteRuleChange(fromDay: 0, rule: .majority),
+                                       VoteRuleChange(fromDay: 4, rule: .count(2)),
+                                       VoteRuleChange(fromDay: 9, rule: .count(VoteRule.customRange.upperBound))]
+        let r: CKRecord = CKRecord(recordType: Records.groupType, recordID: Records.groupRecordID(id))
+        Records.apply(voteRules: rules, to: r)
+        XCTAssertEqual(storedNumbers(r, "voteRules"), [0, 1, 4, 102, 9, 199])
+        XCTAssertEqual(Records.voteRules(r), rules)
+        XCTAssertEqual(Records.groupInfo(from: r, id: id).voteRules, rules)
+    }
+
     func testMalformedVoteRulesAreDroppedOrClamped() {
         let r: CKRecord = record(Records.groupType, Records.groupRecordName)
         r["voteRules"] = numbers([-3, 2, 4, 9, 6, 3, 8])
@@ -230,6 +286,11 @@ final class RecordsTests: XCTestCase {
                                               VoteRuleChange(fromDay: 6, rule: .everyone)])
         r["voteRules"] = numbers([7])
         XCTAssertEqual(Records.voteRules(r), [])
+
+        // A count outside the custom range (a newer build's, or a corrupt one) is dropped like an unknown rule.
+        r["voteRules"] = numbers([1, 100, 2, 101, 3, 200, 4, 199, 5, -1])
+        XCTAssertEqual(Records.voteRules(r), [VoteRuleChange(fromDay: 2, rule: .count(1)),
+                                              VoteRuleChange(fromDay: 4, rule: .count(99))])
     }
 
     func testGroupApplyNeverWritesVoteRules() {
@@ -255,7 +316,7 @@ final class RecordsTests: XCTestCase {
 
         let group: CKRecord = record(Records.groupType, Records.groupRecordName)
         Records.apply(makeGroup(endDay: 29), to: group)
-        Records.apply(voteRules: [VoteRuleChange(fromDay: 2, rule: .twoThirds)], to: group)
+        Records.apply(voteRules: [VoteRuleChange(fromDay: 2, rule: .count(3))], to: group)
 
         let member: CKRecord = record(Records.memberType, "member-maya")
         Records.apply(MemberInfo(userID: "maya", displayName: "Maya", vow: "I will run", joinedDay: 0, joinedEpoch: 0,
@@ -276,7 +337,10 @@ final class RecordsTests: XCTestCase {
         let post: CKRecord = record(Records.postType, "post-1F2E")
         Records.apply(videoPost(), to: post)
 
-        for r in [group, member, checkInRecord, excuse, vote, post] {
+        let reaction: CKRecord = record(Records.reactionType, "reaction-ari-post-1F2E")
+        Records.apply(ReactionInfo(userID: "ari", postID: "post-1F2E", emoji: "❤️", serverDate: nil), to: reaction)
+
+        for r in [group, member, checkInRecord, excuse, vote, post, reaction] {
             for key in r.changedKeys() {
                 XCTAssertTrue(keys.contains(key), "\(r.recordType).\(key) is missing from the zone fetch")
             }

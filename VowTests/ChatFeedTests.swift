@@ -62,18 +62,24 @@ final class ChatFeedTests: XCTestCase {
                         aspect: 1.5, duration: nil, serverDate: served)
     }
 
+    /// A saved reaction; "" is one taken back.
+    private func reaction(_ user: String, on postID: String, _ emoji: String) -> ReactionInfo {
+        return ReactionInfo(userID: user, postID: postID, emoji: emoji, serverDate: at(9, 11))
+    }
+
     private func feed(_ group: GroupInfo? = nil,
                       members: [MemberInfo]? = nil,
                       checkIns: [CheckInInfo] = [],
                       excuses: [ExcuseInfo] = [],
                       votes: [VoteInfo] = [],
                       posts: [PostInfo] = [],
+                      reactions: [ReactionInfo] = [],
                       viewer: String = "me",
                       showAll: Bool = false,
                       now: Date? = nil) -> ChatFeed {
         let snapshot: GroupSnapshot = GroupSnapshot(group: group ?? makeGroup(), members: members ?? everyone,
                                                     checkIns: checkIns, fetchedAt: created, excuses: excuses,
-                                                    votes: votes, posts: posts)
+                                                    votes: votes, posts: posts, reactions: reactions)
         return ChatFeed.build(snapshot, viewerID: viewer, now: now ?? self.now, showAll: showAll)
     }
 
@@ -388,6 +394,59 @@ final class ChatFeedTests: XCTestCase {
         XCTAssertEqual(card?.name, "Someone")
         XCTAssertEqual(card?.vow, "Swim 40 lengths")
         XCTAssertEqual(card?.isMine, false)
+    }
+
+    // MARK: - Reactions
+
+    func testAMessageCarriesItsReactionsInChoiceOrder() {
+        let f: ChatFeed = feed(posts: [message("m1", by: "sam", day: 9, at: at(9, 10)),
+                                       message("m2", by: "maya", day: 9, at: at(9, 10, 30))],
+                               reactions: [reaction("maya", on: "m1", "😂"),
+                                           reaction("me", on: "m1", "❤️"),
+                                           reaction("sam", on: "m1", "😂")])
+        let chips: [ReactionCount] = message(f, "m1")?.reactions ?? []
+        XCTAssertEqual(chips.map { (c: ReactionCount) -> String in c.emoji }, ["❤️", "😂"])
+        XCTAssertEqual(chips.map { (c: ReactionCount) -> Int in c.count }, [1, 2])
+        XCTAssertEqual(chips.map { (c: ReactionCount) -> Bool in c.mine }, [true, false])
+        XCTAssertEqual(message(f, "m1")?.myReaction, "❤️")
+        XCTAssertEqual(message(f, "m2")?.reactions, [])
+        XCTAssertNil(message(f, "m2")?.myReaction)
+    }
+
+    func testTheFeedsReactionsAreTheDomainsCounts() {
+        let posts: [PostInfo] = [message("m1", by: "sam", day: 9, at: at(9, 10))]
+        let reactions: [ReactionInfo] = [reaction("maya", on: "m1", "🔥"), reaction("me", on: "m1", "🔥"),
+                                         reaction("me", on: "m1", "👍")]
+        let snapshot: GroupSnapshot = GroupSnapshot(group: makeGroup(), members: everyone, checkIns: [],
+                                                    fetchedAt: created, posts: posts, reactions: reactions)
+        let built: ChatFeed = ChatFeed.build(snapshot, viewerID: "me", now: now, showAll: false)
+        XCTAssertEqual(message(built, "m1")?.reactions, Reactions.counts(in: snapshot, viewerID: "me")["m1"])
+        XCTAssertEqual(message(built, "m1")?.myReaction, "👍")
+    }
+
+    func testAReactionTakenBackLeavesNoChip() {
+        let f: ChatFeed = feed(posts: [message("m1", by: "sam", day: 9, at: at(9, 10))],
+                               reactions: [reaction("me", on: "m1", "❤️"), reaction("me", on: "m1", "")])
+        XCTAssertEqual(message(f, "m1")?.reactions, [])
+        XCTAssertEqual(f.shape.reactionChips, 0)
+    }
+
+    func testChipsOnShownMessagesShapeTheFeed() {
+        let f: ChatFeed = feed(posts: [message("old", by: "sam", day: 1, at: at(1, 9)),
+                                       message("m1", by: "sam", day: 9, at: at(9, 10)),
+                                       message("m2", by: "maya", day: 9, at: at(9, 11))],
+                               reactions: [reaction("me", on: "m1", "❤️"), reaction("maya", on: "m1", "😮"),
+                                           reaction("sam", on: "m2", "👏"), reaction("me", on: "old", "🔥")])
+        // "old" is behind Earlier, so its chip doesn't count.
+        XCTAssertEqual(f.shape.reactionChips, 3)
+    }
+
+    func testTheReactionPickerFindsItsMessage() {
+        let f: ChatFeed = feed(checkIns: [checkIn("maya", 9, at: at(9, 9))],
+                               posts: [message("m1", by: "sam", day: 9, at: at(9, 10))])
+        XCTAssertEqual(f.message("m1")?.post.id, "m1")
+        XCTAssertNil(f.message("claim-9-maya"))
+        XCTAssertNil(f.message("gone"))
     }
 
     // MARK: - The "+" card and the preamble

@@ -10,6 +10,16 @@ enum MainTab: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
+    /// The page a swipe to the left moves to; nil from the last.
+    var next: MainTab? {
+        MainTab(rawValue: rawValue + 1)
+    }
+
+    /// The page a swipe to the right moves to; nil from the first.
+    var previous: MainTab? {
+        MainTab(rawValue: rawValue - 1)
+    }
+
     var title: String {
         switch self {
         case .home: return "Home"

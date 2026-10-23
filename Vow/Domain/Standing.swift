@@ -58,19 +58,51 @@ struct MemberStanding: Identifiable, Equatable {
     }
 }
 
-struct LedgerLine: Identifiable, Equatable {
-    enum Kind: String {
-        case kept, missed, forfeit, payout, split, carry, joined, info, excused
+/// Someone in a day of the ledger. `name` is their display name as stored: the UI says "You" for the viewer.
+struct LedgerPerson: Equatable, Hashable {
+    let userID: String
+    let name: String
+}
+
+/// A stake lost on a closed day: no claim, or a claim the group overruled.
+struct Forfeit: Equatable {
+    enum Reason: Equatable {
+        case missed
+        case checkInOverruled
+        case excuseOverruled
     }
 
-    /// Stable, e.g. "d12-forfeit-<userID>".
-    let id: String
+    let person: LedgerPerson
+    let reason: Reason
+    /// The group's stake, positive.
+    let amount: Double
+}
+
+/// One day of the ledger, as the Activity tab shows it. Every list is in Settlement's member order, and the
+/// day reads the same on every device and for every viewer. Each keeper collects `forfeit.amount /
+/// kept.count` from each forfeit and `carriedIn / kept.count` from the carry, which add up to `share`.
+struct LedgerDay: Identifiable, Equatable {
     let day: Int
-    let kind: Kind
-    /// e.g. "Day 13 · Maya missed · −2 pts", "Day 13 · Maya's check-in was overruled · −2 pts".
-    let text: String
-    /// Signed, from the viewer's perspective; only on the viewer's own lines.
-    let amount: Double?
+    /// false only for today, which carries joins and leaves alone: no outcomes and no money until it
+    /// closes (the carry it starts with is `GroupSummary.pot`). A finished vow lists nothing after its
+    /// final day.
+    let isClosed: Bool
+    let joined: [LedgerPerson]
+    let left: [LedgerPerson]
+    /// Standing check-ins: each collects `share`.
+    let kept: [LedgerPerson]
+    /// Standing excuses: they sit the day out, neither paying nor collecting.
+    let excused: [LedgerPerson]
+    let forfeits: [Forfeit]
+    /// The pot carried in from earlier days that nobody kept.
+    let carriedIn: Double
+    /// What each keeper collects: (carriedIn + the day's forfeits) / kept.count; 0 when nobody kept.
+    let share: Double
+    /// Left unsplit for the next day because nobody kept: carriedIn + the day's forfeits (just carriedIn on
+    /// a day everyone sat out); 0 when someone kept.
+    let carriedOut: Double
+
+    var id: Int { day }
 }
 
 struct GroupSummary: Equatable {
@@ -88,8 +120,9 @@ struct GroupSummary: Equatable {
     let totalForfeited: Double
     /// Active members; viewer first, then by displayName.
     let standings: [MemberStanding]
-    /// Newest first, capped at 120.
-    let ledger: [LedgerLine]
+    /// Newest first, capped at `Settlement.dayCap` days: every closed day anyone took part in, joined or
+    /// left on, and today once someone joins or leaves.
+    let days: [LedgerDay]
     let viewer: MemberStanding?
     /// GroupInfo.endDay: the vow's final day (inclusive); nil = no end.
     var endDay: Int? = nil

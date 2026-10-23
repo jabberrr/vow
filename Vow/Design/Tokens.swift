@@ -11,7 +11,7 @@ extension Color {
 }
 
 /// Colour roles (dark only). Chrome is neutral; colour always means something:
-/// flame = streak, gain/loss = points, the day's orb colours = kept today.
+/// flame = streak, gain/loss = points, the day's orb colours = kept today, green/red on a vote = its choice.
 enum Ink {
     static let bg: Color = Color(hex: 0x08090E)
     static let sheet: Color = Color(hex: 0x0F1118)
@@ -35,8 +35,16 @@ enum Ink {
     static let flameGold: Color = Color(hex: 0xFFC24A)
     static let gain: Color = Color(hex: 0x4ADE9B)
     static let loss: Color = Color(hex: 0xFF7066)
-    /// Behind the sidebar.
+    /// Behind the sidebar, Chat's "+" card and its reaction picker.
     static let scrim: Color = Color.black.opacity(0.45)
+    /// The "Counts" checkmark on a vote button. Its own role, though it shares `gain`'s hue: a vote isn't points.
+    static let voteCounts: Color = Color(hex: 0x4ADE9B)
+    /// The "Doesn't count" ✕ on a vote button, in `loss`'s hue.
+    static let voteAgainst: Color = Color(hex: 0xFF7066)
+    /// Your "Counts" vote: the whole button, deep enough for `text` on it (4.7:1).
+    static let voteCountsFill: Color = Color(hex: 0x1A7D51)
+    /// Your "Doesn't count" vote, deep enough for `text` on it (4.6:1).
+    static let voteAgainstFill: Color = Color(hex: 0xC63F35)
     /// The milestone tag's border.
     static let flameEdge: Color = Color(hex: 0xFFAA3C).opacity(0.35)
     /// Dark ink on a flame fill: a kept day's date in the streak calendar.

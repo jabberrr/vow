@@ -32,7 +32,7 @@ final class VowStatusTests: XCTestCase {
             standings.append(v)
         }
         return GroupSummary(currentDay: 19, cycle: 1, dayInCycle: 20, glyphNumber: 20, pot: 0, totalForfeited: 0,
-                            standings: standings, ledger: [], viewer: viewer, endDay: nil, isFinished: finished)
+                            standings: standings, days: [], viewer: viewer, endDay: nil, isFinished: finished)
     }
 
     func testFinishedWinsOverEverything() {

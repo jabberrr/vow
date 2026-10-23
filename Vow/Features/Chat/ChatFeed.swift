@@ -1,9 +1,9 @@
 import Foundation
 
-/// The Chat feed of one group, worked out from its records and `Review.tallies`: text messages, one card per
-/// check-in or excuse with that day's proof inside it, and a one-line pointer where proof arrived after the
-/// conversation had moved on, so no photo is drawn twice. Pure, so the page can build it once per snapshot
-/// and minute, and the rules can be tested.
+/// The Chat feed of one group, worked out from its records, `Review.tallies` and `Reactions.counts`: text
+/// messages with their reactions, one card per check-in or excuse with that day's proof inside it, and a
+/// one-line pointer where proof arrived after the conversation had moved on, so no photo is drawn twice.
+/// Pure, so the page can build it once per snapshot and minute, and the rules can be tested.
 ///
 /// Rows run oldest first by (day, time, id), and a header starts each day. Anything still sending, or
 /// failed, is dated now and kept at the end of its day in the order it was sent. Until Earlier is tapped,
@@ -24,7 +24,7 @@ struct ChatFeed: Equatable {
     /// The day proof sent now attaches to (`Review.proofDay`), and your claim's kind on it.
     let proofDay: Int?
     let proofKind: ClaimKind?
-    /// Cards opening up or gaining proof, which the page animates.
+    /// Cards opening up or gaining proof, and reactions coming and going, which the page animates.
     let shape: ChatShape
 
     /// Nothing at all in the epoch yet: the days shown always reach the newest item.
@@ -38,17 +38,29 @@ struct ChatFeed: Equatable {
         return tally.kind == .checkIn && proofCount == 0 && tally.countsVotes + tally.againstVotes == 0
     }
 
+    /// The message `postID` among the rows shown: what the reaction picker is open over.
+    func message(_ postID: String) -> ChatMessage? {
+        for row in rows where row.id == postID {
+            if case .message(let message) = row.content {
+                return message
+            }
+        }
+        return nil
+    }
+
     /// The scroll target of the claim card for (subject, day).
     static func cardID(_ key: ClaimKey) -> String {
         return "claim-\(key.day)-\(key.subject)"
     }
 
     /// The feed as `viewerID` sees it at `now`. `showAll`: Earlier was tapped, so every day of the epoch shows.
-    /// Votes are counted once, in one `Review.tallies` pass; only the claims in the days shown become cards.
+    /// Votes and reactions are counted once each, in one `Review.tallies` and one `Reactions.counts` pass;
+    /// only the claims in the days shown become cards.
     static func build(_ snapshot: GroupSnapshot, viewerID: String, now: Date, showAll: Bool) -> ChatFeed {
         let group: GroupInfo = snapshot.group
         let today: Int = DayClock.currentDay(group, now: now)
         let tallies: [ClaimKey: ClaimTally] = Review.tallies(snapshot: snapshot, now: now)
+        let reactions: [String: [ReactionCount]] = Reactions.counts(in: snapshot, viewerID: viewerID)
         let people: FeedPeople = FeedPeople(snapshot.members, viewerID: viewerID, group: group, now: now)
 
         var all: [FeedEntry] = []
@@ -83,6 +95,7 @@ struct ChatFeed: Equatable {
         var rows: [ChatRow] = []
         var compactCards: Int = 0
         var proofCount: Int = 0
+        var chipCount: Int = 0
         var section: Int? = nil
         for (index, entry) in entries.enumerated() {
             var gap: ChatGap = .item
@@ -95,13 +108,16 @@ struct ChatFeed: Equatable {
             case .message(let post):
                 let startsRun: Bool = !continuesRun(entries, at: index)
                 let endsRun: Bool = index + 1 == entries.count || !continuesRun(entries, at: index + 1)
+                let chips: [ReactionCount] = reactions[post.id] ?? []
+                chipCount += chips.count
                 let message: ChatMessage = ChatMessage(post: post,
                                                        isMine: post.authorID == viewerID,
                                                        author: people.name(post.authorID),
                                                        initial: people.initial(post.authorID),
                                                        time: entry.stamp.time,
                                                        startsRun: startsRun,
-                                                       endsRun: endsRun)
+                                                       endsRun: endsRun,
+                                                       reactions: chips)
                 rows.append(ChatRow(id: post.id, gap: startsRun ? gap : .run, content: .message(message)))
             case .claim(let key):
                 guard let tally: ClaimTally = tallies[key] else { continue }
@@ -136,7 +152,7 @@ struct ChatFeed: Equatable {
                         hasVoters: hasVoters,
                         proofDay: proofDay,
                         proofKind: proofKind,
-                        shape: ChatShape(compactCards: compactCards, proofs: proofCount))
+                        shape: ChatShape(compactCards: compactCards, proofs: proofCount, reactionChips: chipCount))
     }
 
     // MARK: - Helpers
@@ -238,10 +254,11 @@ enum ChatGap: Equatable {
     case none, run, item, section
 }
 
-/// Counts the page animates on: a card opening up, or proof arriving in one.
+/// Counts the page animates on: a card opening up, proof arriving in one, or a reaction chip coming or going.
 struct ChatShape: Equatable {
     let compactCards: Int
     let proofs: Int
+    let reactionChips: Int
 }
 
 /// A text message, and its place in its author's run.
@@ -255,8 +272,15 @@ struct ChatMessage: Equatable {
     let time: Date
     /// First of its run: the name line (others) or the time (yours) goes above it.
     let startsRun: Bool
-    /// Last of its run: others' letter disc sits beside it.
+    /// Last of its run: it has the bubble's tail, and others' letter disc sits beside it.
     let endsRun: Bool
+    /// Its chips, one per emoji, from the feed's one `Reactions.counts` pass.
+    let reactions: [ReactionCount]
+
+    /// Your reaction to it, if any.
+    var myReaction: String? {
+        reactions.first { (reaction: ReactionCount) -> Bool in reaction.mine }?.emoji
+    }
 }
 
 /// A check-in or an excuse, with everything its card draws.

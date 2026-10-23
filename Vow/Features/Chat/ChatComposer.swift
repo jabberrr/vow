@@ -16,7 +16,8 @@ struct ChatComposer: View {
     @Environment(\.dynamicTypeSize) private var typeSize: DynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
 
-    private static let fieldMinHeight: CGFloat = 38
+    /// A single line's height: the "+" target's, so the two sit level.
+    private static let fieldMinHeight: CGFloat = Gap.hit
 
     init(draft: Binding<String>,
          focus: FocusState<Bool>.Binding,
@@ -41,7 +42,7 @@ struct ChatComposer: View {
         }
         .padding(.leading, Gap.l)
         .padding(.trailing, Gap.m)
-        .padding(.vertical, Gap.xs)
+        .padding(.vertical, Gap.s)
         .background(Ink.bg)
         .onChange(of: draft) { (_: String, text: String) in
             clamp(text)
@@ -88,15 +89,13 @@ struct ChatComposer: View {
                 .padding(.leading, Gap.m)
                 .padding(.trailing, canSend ? Gap.xs : Gap.m)
                 .padding(.vertical, Gap.s)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: ChatComposer.fieldMinHeight, alignment: .leading)
             if canSend {
                 sendButton
                     .transition(sendTransition)
             }
         }
-        .frame(minHeight: ChatComposer.fieldMinHeight)
         .background(fieldBox)
-        .padding(.vertical, Gap.xs)
         .animation(Anim.standard, value: canSend)
     }
 
@@ -116,17 +115,17 @@ struct ChatComposer: View {
         reduceMotion ? AnyTransition.opacity : AnyTransition.opacity.combined(with: .scale(scale: 0.8))
     }
 
-    /// A 30 pt disc inset from the field's trailing and bottom edges; its target reaches 44 pt.
+    /// A 34 pt disc centred in a 44 pt target in the field's trailing bottom corner, so it sits level with a
+    /// single line and stays by the last as the field grows.
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Ink.onPrimary)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 34)
                 .background(Circle().fill(Ink.primary))
-                .padding(.trailing, Gap.xs)
-                .padding(.bottom, Gap.xs)
-                .contentShape(Rectangle().inset(by: -5))
+                .frame(width: Gap.hit, height: Gap.hit)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
         .accessibilityLabel("Send")

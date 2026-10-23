@@ -13,7 +13,8 @@ struct Sidebar: View {
     let now: Date
     /// Open or opening: VoiceOver can reach the panel, and it is modal.
     let isOpen: Bool
-    /// Open, or following a swipe from the edge. It turns true before the panel shows more than its edge.
+    /// Open, or following a swipe from the edge or across Home. It turns true before the panel shows more than
+    /// its edge.
     let isShown: Bool
     /// The panel is open, nothing is up or coming and the room is lit: the balance can reveal yesterday.
     let canReveal: Bool

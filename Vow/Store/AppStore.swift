@@ -56,11 +56,22 @@ final class AppStore {
 
     @ObservationIgnored private var refreshingIDs: Set<GroupID> = []
     @ObservationIgnored private var refreshAllInFlight: Bool = false
+    /// Something asked for a refresh of every group while one ran: it goes round once more.
+    @ObservationIgnored private var refreshAllAgain: Bool = false
+    /// The calls that wait for that round.
+    @ObservationIgnored private var refreshAllWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Counts the rounds that brought something new, so a push can tell iOS whether it did.
+    @ObservationIgnored private var refreshAllChanges: Int = 0
+    /// CloudKit's push subscriptions were saved this launch, for this account (`subscribeIfNeeded`).
+    @ObservationIgnored private var subscribed: Bool = false
+    /// A save of them is under way.
+    @ObservationIgnored private var subscribing: Bool = false
     @ObservationIgnored private var bootstrapInFlight: Bool = false
     @ObservationIgnored private var themeCache: [GroupID: DailyTheme] = [:]
     @ObservationIgnored private var inFlightCheckIns: Set<CheckInInfo> = []
     @ObservationIgnored private var inFlightExcuses: Set<ExcuseInfo> = []
     @ObservationIgnored private var inFlightVotes: Set<VoteInfo> = []
+    @ObservationIgnored private var inFlightReactions: Set<ReactionInfo> = []
     /// Ids of posts still being saved.
     @ObservationIgnored private var inFlightPosts: Set<String> = []
     /// The drafts of failed proofs, by post id: their files wait in the outbox for a retry.
@@ -137,11 +148,13 @@ final class AppStore {
                 failedDrafts = [:]
                 cache.clear()
                 MediaCache.shared.clearAll()
+                cloud.forgetAllZones()
+                subscribed = false
             }
             userID = uid
             prefs.saveUserID(uid)
             phase = .ready
-            installShareHandler()
+            installInboxes()
             await refreshAll()
         } catch {
             let message: String = CloudErrors.message(error)
@@ -149,30 +162,74 @@ final class AppStore {
                 phase = .failed(message)
             } else {
                 phase = .ready
-                installShareHandler()
+                installInboxes()
                 toast = message
             }
         }
     }
 
-    private func installShareHandler() {
+    /// What the system delivers before the store can act on it: share invitations, and CloudKit's pushes, which
+    /// refresh every group (a push doesn't say which changed).
+    private func installInboxes() {
         ShareInbox.handler = { [weak self] (metadata: CKShare.Metadata) in
             guard let store = self else { return }
             Task { @MainActor in
                 _ = await store.acceptShare(metadata)
             }
         }
+        ChangeInbox.handler = { [weak self] () async -> Bool in
+            guard let store = self else { return false }
+            let before: Int = store.refreshAllChanges
+            await store.refreshAll()
+            return store.refreshAllChanges != before
+        }
     }
 
+    /// Saves CloudKit's push subscriptions once per launch and account. A refresh that reaches iCloud asks, so the
+    /// first one does it and, after a failed save, the next one tries again (the polls sync meanwhile). A save
+    /// that ends after the account changed doesn't count for the new one.
+    private func subscribeIfNeeded() {
+        guard let uid = userID, !subscribed, !subscribing else { return }
+        subscribing = true
+        let service: CloudService = cloud
+        Task { @MainActor in
+            let saved: Bool = await service.ensureSubscriptions()
+            self.subscribing = false
+            if saved && self.userID == uid {
+                self.subscribed = true
+            }
+        }
+    }
+
+    /// Refreshes every group. A call while one runs (a push, a pull to refresh) doesn't start another: the running
+    /// one goes round once more when it ends, so a change that landed after it fetched that group isn't left for
+    /// the next poll, and the call returns when that round has. Calls during one round share the next.
     func refreshAll() async {
-        guard userID != nil, !refreshAllInFlight else { return }
+        guard userID != nil else { return }
+        if refreshAllInFlight {
+            refreshAllAgain = true
+            await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+                self.refreshAllWaiters.append(waiter)
+            }
+            return
+        }
         refreshAllInFlight = true
         isRefreshing = true
-        defer {
-            refreshAllInFlight = false
-            isRefreshing = false
+        repeat {
+            refreshAllAgain = false
+            await refreshEveryGroup()
+        } while refreshAllAgain
+        refreshAllInFlight = false
+        isRefreshing = false
+        let waiters: [CheckedContinuation<Void, Never>] = refreshAllWaiters
+        refreshAllWaiters = []
+        for waiter in waiters {
+            waiter.resume()
         }
+    }
 
+    /// One round of `refreshAll`.
+    private func refreshEveryGroup() async {
         let keysAtStart: Set<GroupID> = Set(snapshots.keys)
         let ids: [GroupID]
         do {
@@ -183,6 +240,7 @@ final class AppStore {
             }
             return
         }
+        subscribeIfNeeded()
 
         var fresh: [GroupID: GroupSnapshot] = [:]
         var firstError: Error? = nil
@@ -217,11 +275,14 @@ final class AppStore {
 
         // Writing `snapshots` re-renders every view that reads it, and persisting encodes every group.
         if fresh != snapshots {
-            // A group that has gone (its owner deleted it, or you left on another device) takes its media.
+            // A group that has gone (its owner deleted it, or you left on another device) takes its media and
+            // its mirror.
             for id in snapshots.keys where fresh[id] == nil {
                 MediaCache.shared.removeGroup(id)
+                cloud.forgetZone(id)
             }
             snapshots = fresh
+            refreshAllChanges += 1
             if let p = pendingVowPrompt, fresh[p] == nil {
                 pendingVowPrompt = nil
             }
@@ -294,6 +355,7 @@ final class AppStore {
         prefs.clearAll()
         cache.clear()
         MediaCache.shared.clearAll()
+        cloud.forgetAllZones()
         chatSeenAt = [:]
         profile = nil
         testingModeStorage = false
@@ -689,6 +751,40 @@ final class AppStore {
         }
     }
 
+    /// Sets your reaction to a post: `emoji` replaces the one you had, and nil takes it back (the record keeps "",
+    /// because it is overwritten, never deleted). Optimistic like a vote: pending at once, then the server's copy,
+    /// or back to the reaction it replaced. A second change to the same post while one saves is ignored, because
+    /// two saves of one record could land out of order. Active members only, on a post that has been sent.
+    func react(_ emoji: String?, to postID: String, in id: GroupID) async {
+        guard let uid = userID, let s = snapshots[id], let me = myMember(id), me.leftDay == nil,
+              s.posts.contains(where: { (p: PostInfo) -> Bool in p.id == postID && p.serverDate != nil }) else { return }
+        let choice: String = emoji ?? ""
+        let pending = ReactionInfo(userID: uid, postID: postID, emoji: choice, serverDate: nil)
+        if inFlightReactions.contains(where: { (r: ReactionInfo) -> Bool in AppStore.sameReaction(r, pending) }) { return }
+        // The last copy, as `Reactions` reads them.
+        let previous: ReactionInfo? = s.reactions.last(where: { (r: ReactionInfo) -> Bool in
+            AppStore.sameReaction(r, pending)
+        })
+        if (previous?.emoji ?? "") == choice { return }
+
+        inFlightReactions.insert(pending)
+        defer { inFlightReactions.remove(pending) }
+        setReaction(pending, in: id)
+
+        do {
+            let saved: ReactionInfo = try await cloud.saveReaction(pending, in: id)
+            setReaction(saved, in: id)
+            persist()
+        } catch {
+            if let p = previous {
+                setReaction(p, in: id)
+            } else {
+                removeReaction(pending, in: id)
+            }
+            toast = ownerStorageFull(error, in: id) ?? "Couldn't react. Try again."
+        }
+    }
+
     /// False if it wasn't sent. A failed save keeps the message in `failedPosts`, with no toast unless the
     /// group owner's storage is full.
     @discardableResult
@@ -874,6 +970,7 @@ final class AppStore {
     /// excuses and posts are never deleted (resets bump the epoch), so a confirmed one can always be kept.
     /// A vote is overwritten when its voter changes their mind, so yours wins over the fetched copy while
     /// it is saving, and a confirmed one only if the server changed it later than the fetched copy says.
+    /// A reaction is overwritten the same way, and kept the same way.
     private func merged(_ incoming: GroupSnapshot, previous: GroupSnapshot?) -> GroupSnapshot {
         guard let prev = previous else { return incoming }
         var out: GroupSnapshot = incoming
@@ -921,6 +1018,23 @@ final class AppStore {
                 out.posts.append(p)
             }
         }
+        // Index of the last fetched copy of each reaction, the one `Reactions` reads.
+        var reactions: [ReactionKey: Int] = [:]
+        for (i, r) in out.reactions.enumerated() {
+            reactions[ReactionKey(r)] = i
+        }
+        for r in prev.reactions where r.serverDate != nil || inFlightReactions.contains(r) {
+            let key: ReactionKey = ReactionKey(r)
+            if let i = reactions[key] {
+                let fetchedChange: Date = out.reactions[i].serverDate ?? .distantPast
+                if inFlightReactions.contains(r) || (r.serverDate ?? .distantPast) > fetchedChange {
+                    out.reactions[i] = r
+                }
+            } else {
+                reactions[key] = out.reactions.count
+                out.reactions.append(r)
+            }
+        }
         return out
     }
 
@@ -934,6 +1048,11 @@ final class AppStore {
     /// One vote per voter, subject, day and epoch: the vote record's identity.
     private static func sameVote(_ a: VoteInfo, _ b: VoteInfo) -> Bool {
         return VoteKey(a) == VoteKey(b)
+    }
+
+    /// One reaction per user and post: the reaction record's identity.
+    private static func sameReaction(_ a: ReactionInfo, _ b: ReactionInfo) -> Bool {
+        return ReactionKey(a) == ReactionKey(b)
     }
 
     /// A check-in's or an excuse's identity, as its record name spells it: who, which day, which epoch.
@@ -958,6 +1077,17 @@ final class AppStore {
         }
     }
 
+    /// A reaction's identity, as its record name spells it: who, on which post.
+    private struct ReactionKey: Hashable {
+        let userID: String
+        let postID: String
+
+        init(_ r: ReactionInfo) {
+            userID = r.userID
+            postID = r.postID
+        }
+    }
+
     /// Puts `vote` in place of the one it overwrites, if any.
     private func setVote(_ vote: VoteInfo, in id: GroupID) {
         guard var s = snapshots[id] else { return }
@@ -969,6 +1099,20 @@ final class AppStore {
     private func removeVote(_ vote: VoteInfo, in id: GroupID) {
         guard var s = snapshots[id] else { return }
         s.votes.removeAll(where: { $0 == vote })
+        snapshots[id] = s
+    }
+
+    /// Puts `reaction` in place of the one it overwrites, if any.
+    private func setReaction(_ reaction: ReactionInfo, in id: GroupID) {
+        guard var s = snapshots[id] else { return }
+        s.reactions.removeAll(where: { (r: ReactionInfo) -> Bool in AppStore.sameReaction(r, reaction) })
+        s.reactions.append(reaction)
+        snapshots[id] = s
+    }
+
+    private func removeReaction(_ reaction: ReactionInfo, in id: GroupID) {
+        guard var s = snapshots[id] else { return }
+        s.reactions.removeAll(where: { $0 == reaction })
         snapshots[id] = s
     }
 
@@ -1043,12 +1187,14 @@ final class AppStore {
         snapshots[id] = s
     }
 
-    /// Forgets a group you left or deleted, or that has gone, with its downloaded photos and videos.
+    /// Forgets a group you left or deleted, or that has gone, with its downloaded photos and videos and what
+    /// its fetches have seen.
     private func removeLocal(_ id: GroupID) {
         snapshots[id] = nil
         groupIDs.removeAll(where: { $0 == id })
         themeCache[id] = nil
         MediaCache.shared.removeGroup(id)
+        cloud.forgetZone(id)
         if pendingVowPrompt == id {
             pendingVowPrompt = nil
         }
@@ -1080,6 +1226,7 @@ final class AppStore {
                 s.excuses.removeAll(where: { $0.serverDate == nil })
                 s.votes.removeAll(where: { $0.serverDate == nil })
                 s.posts.removeAll(where: { $0.serverDate == nil })
+                s.reactions.removeAll(where: { $0.serverDate == nil })
                 list.append(s)
             }
         }

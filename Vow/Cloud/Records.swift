@@ -3,7 +3,8 @@ import Foundation
 
 /// CKRecord <-> domain mapping. Record layout is fixed by the shared contract:
 /// - "Group" / "group": name, stake, createdAt, timeZoneID, isTest, testDay, epoch, ownerUserID, endDay (optional: the
-///   final day's index; absent = no end), voteRules (optional: [fromDay, rule, …]; absent = "More than half" from day 0)
+///   final day's index; absent = no end), voteRules (optional: [fromDay, rule code, …]; absent = "More than half" from
+///   day 0)
 /// - "Member" / "member-<userID>": userID, displayName, vow, joinedDay, joinedEpoch, leftDay (-1 = active)
 /// - "CheckIn" / "checkin-<epoch>-<userID>-<day>": userID, day, epoch (server creationDate = trusted time)
 /// - "Excuse" / "excuse-<epoch>-<userID>-<day>": userID, day, epoch, text (server creationDate = trusted time)
@@ -11,6 +12,8 @@ import Foundation
 ///   (server modificationDate = trusted time)
 /// - "Post" / "post-<UUID>": authorID, text, day, epoch, isProof, mediaKind, aspect, duration (server creationDate =
 ///   sent time), plus the assets media and thumb, which the zone fetch never downloads
+/// - "Reaction" / "reaction-<userID>-<postID>": userID, postID, emoji ("" = taken back) (server modificationDate =
+///   trusted time)
 enum Records {
     static let groupType: String = "Group"
     static let memberType: String = "Member"
@@ -18,6 +21,7 @@ enum Records {
     static let excuseType: String = "Excuse"
     static let voteType: String = "Vote"
     static let postType: String = "Post"
+    static let reactionType: String = "Reaction"
 
     static let groupRecordName: String = "group"
     static let zonePrefix: String = "group-"
@@ -28,12 +32,15 @@ enum Records {
         "name", "stake", "createdAt", "timeZoneID", "isTest", "testDay", "epoch", "ownerUserID", "endDay", "voteRules",
         "userID", "displayName", "vow", "joinedDay", "joinedEpoch", "leftDay",
         "day", "text", "voterID", "subjectID", "counts", "castDay",
-        "authorID", "isProof", "mediaKind", "aspect", "duration"
+        "authorID", "isProof", "mediaKind", "aspect", "duration",
+        "postID", "emoji"
     ]
 
     /// The longest excuse and post text kept. Longer text (only another client could write it) is cut on read.
     static let excuseTextLimit: Int = 280
     static let postTextLimit: Int = 2_000
+    /// The longest reaction kept, in characters: any one emoji fits, and what another client writes stays small.
+    static let emojiLimit: Int = 16
     /// A post's width / height is kept within this, so a malformed value can't blow up a layout.
     static let aspectRange: ClosedRange<Double> = 0.1...10
 
@@ -73,6 +80,12 @@ enum Records {
     /// A post's record name is its id ("post-<UUID>"), made on the sending device.
     static func postRecordID(_ postID: String, in id: GroupID) -> CKRecord.ID {
         return CKRecord.ID(recordName: postID, zoneID: zoneID(id))
+    }
+
+    /// One per (user, post), so reacting again overwrites it.
+    static func reactionRecordID(_ r: ReactionInfo, in id: GroupID) -> CKRecord.ID {
+        let name: String = "reaction-\(r.userID)-\(r.postID)"
+        return CKRecord.ID(recordName: name, zoneID: zoneID(id))
     }
 
     static func shareRecordID(in id: GroupID) -> CKRecord.ID {
@@ -141,14 +154,14 @@ enum Records {
         return min(max(v, 0), EndDate.maxEndDay)
     }
 
-    /// voteRules is a flat Int64 list, [fromDay0, rule0, fromDay1, rule1, …]; absent reads as nil ("More than half"
-    /// from day 0). A pair with an unknown rule (from a newer build) and an odd last value are dropped, and days are
-    /// clamped to 0 or more.
+    /// voteRules is a flat Int64 list, [fromDay0, code0, fromDay1, code1, …] (`VoteRule.code`); absent reads as nil
+    /// ("More than half" from day 0). A pair with an unknown code (from a newer build) and an odd last value are
+    /// dropped, and days are clamped to 0 or more.
     static func voteRules(_ record: CKRecord) -> [VoteRuleChange]? {
         guard let values = record["voteRules"] as? [NSNumber] else { return nil }
         var rules: [VoteRuleChange] = []
         for i in stride(from: 0, to: values.count - 1, by: 2) {
-            if let rule = VoteRule(rawValue: values[i + 1].intValue) {
+            if let rule = VoteRule(code: values[i + 1].intValue) {
                 rules.append(VoteRuleChange(fromDay: max(values[i].intValue, 0), rule: rule))
             }
         }
@@ -182,7 +195,7 @@ enum Records {
         var values: [NSNumber] = []
         for change in rules {
             values.append(NSNumber(value: Int64(change.fromDay)))
-            values.append(NSNumber(value: Int64(change.rule.rawValue)))
+            values.append(NSNumber(value: Int64(change.rule.code)))
         }
         record["voteRules"] = values as CKRecordValue
     }
@@ -348,5 +361,26 @@ enum Records {
         if let url: URL = thumb {
             record[MediaAssetKey.thumb.rawValue] = CKAsset(fileURL: url) as CKRecordValue
         }
+    }
+
+    // MARK: - Reaction
+
+    /// serverDate is the record's modificationDate, because a changed reaction is dated by when it changed. An emoji
+    /// that is missing reads as "" (taken back); a longer one (only another client could write it) is cut.
+    static func reactionInfo(from record: CKRecord) -> ReactionInfo? {
+        guard let uid = string(record, "userID"), !uid.isEmpty else { return nil }
+        guard let post = string(record, "postID"), !post.isEmpty else { return nil }
+        return ReactionInfo(
+            userID: uid,
+            postID: post,
+            emoji: clipped(string(record, "emoji") ?? "", to: emojiLimit),
+            serverDate: record.modificationDate
+        )
+    }
+
+    static func apply(_ reaction: ReactionInfo, to record: CKRecord) {
+        record["userID"] = reaction.userID as CKRecordValue
+        record["postID"] = reaction.postID as CKRecordValue
+        record["emoji"] = clipped(reaction.emoji, to: emojiLimit) as CKRecordValue
     }
 }

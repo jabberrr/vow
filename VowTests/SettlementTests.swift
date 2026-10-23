@@ -65,19 +65,33 @@ final class SettlementTests: XCTestCase {
         return nil
     }
 
-    private func texts(_ s: GroupSummary) -> [String] {
-        var out: [String] = []
-        for line in s.ledger {
-            out.append(line.text)
-        }
-        return out
+    private let ari: LedgerPerson = LedgerPerson(userID: "me", name: "Ari")
+    private let maya: LedgerPerson = LedgerPerson(userID: "maya", name: "Maya")
+    private let theo: LedgerPerson = LedgerPerson(userID: "theo", name: "Theo")
+    private let zed: LedgerPerson = LedgerPerson(userID: "zed", name: "Zed")
+    private let lou: LedgerPerson = LedgerPerson(userID: "lou", name: "Lou")
+
+    private func forfeit(_ person: LedgerPerson, _ reason: Forfeit.Reason = .missed, amount: Double = 2) -> Forfeit {
+        return Forfeit(person: person, reason: reason, amount: amount)
     }
 
-    private let minus: String = "\u{2212}"
+    /// A closed day of the ledger; the money defaults to none.
+    private func closed(_ day: Int, joined: [LedgerPerson] = [], left: [LedgerPerson] = [], kept: [LedgerPerson] = [],
+                        excused: [LedgerPerson] = [], forfeits: [Forfeit] = [], carriedIn: Double = 0, share: Double = 0,
+                        carriedOut: Double = 0) -> LedgerDay {
+        return LedgerDay(day: day, isClosed: true, joined: joined, left: left, kept: kept, excused: excused,
+                         forfeits: forfeits, carriedIn: carriedIn, share: share, carriedOut: carriedOut)
+    }
+
+    /// Listed day `day` of the ledger.
+    private func entry(_ s: GroupSummary, _ day: Int) throws -> LedgerDay {
+        let found: LedgerDay? = s.days.first { (d: LedgerDay) -> Bool in d.day == day }
+        return try XCTUnwrap(found, "day \(day) isn't listed")
+    }
 
     // MARK: - Splitting
 
-    func testSplitAmongKeepersNetsSumToZero() {
+    func testSplitAmongKeepersNetsSumToZero() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya"), member("theo", "Theo"), member("zed", "Zed")]
         let s: GroupSummary = summarize(makeGroup(testDay: 1), members,
                                         [checkIn("me", 0), checkIn("maya", 0), checkIn("theo", 0)])
@@ -94,23 +108,19 @@ final class SettlementTests: XCTestCase {
         }
         XCTAssertEqual(sum, 0, accuracy: 1e-9)
 
-        let t: [String] = texts(s)
-        XCTAssertEqual(t.count, 8)
-        XCTAssertEqual(Array(t.prefix(4)), [
-            "Day 1 · You collect +0.67 pts",
-            "Day 1 · Pot split 3 ways · +0.67 pts each",
-            "Day 1 · Zed missed · \(minus)2 pts",
-            "Day 1 · You kept"
-        ])
-        XCTAssertTrue(t.contains("Day 1 · You joined"))
-        XCTAssertTrue(t.contains("Day 1 · Maya joined"))
-        XCTAssertEqual(s.ledger[0].kind, .payout)
-        XCTAssertEqual(s.ledger[0].amount ?? 0, 2.0 / 3.0, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger[1].kind, .split)
-        XCTAssertNil(s.ledger[1].amount)
-        XCTAssertEqual(s.ledger[2].kind, .forfeit)
-        XCTAssertEqual(s.ledger[2].id, "d0-forfeit-zed")
-        XCTAssertNil(s.ledger[2].amount)
+        // Today (day 1) has no joins or leaves, so only day 0 is listed.
+        XCTAssertEqual(s.days.count, 1)
+        let d: LedgerDay = try entry(s, 0)
+        XCTAssertTrue(d.isClosed)
+        XCTAssertEqual(d.joined, [ari, maya, theo, zed])
+        XCTAssertEqual(d.kept, [ari, maya, theo])
+        XCTAssertEqual(d.excused, [])
+        XCTAssertEqual(d.forfeits, [forfeit(zed)])
+        XCTAssertEqual(d.carriedIn, 0, accuracy: 1e-9)
+        XCTAssertEqual(d.share, 2.0 / 3.0, accuracy: 1e-9)
+        XCTAssertEqual(d.carriedOut, 0, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "me"), 2.0 / 3.0, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "zed"), -2, accuracy: 1e-9)
 
         // Viewer first, then by name.
         XCTAssertEqual(s.standings.map { $0.userID }, ["me", "maya", "theo", "zed"])
@@ -129,22 +139,13 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -10, accuracy: 1e-9)
         XCTAssertEqual(s.pot, 0, accuracy: 1e-9)
         XCTAssertEqual(s.totalForfeited, 15, accuracy: 1e-9)
-        XCTAssertEqual(texts(s), [
-            "Day 3 · You kept",
-            "Day 2 · You collect +15 pts",
-            "Day 2 · Pot split 1 way · +15 pts each",
-            "Day 2 · Maya missed · \(minus)5 pts",
-            "Day 2 · You kept",
-            "Day 1 · Nobody kept · pot carries 10 pts",
-            "Day 1 · Maya missed · \(minus)5 pts",
-            "Day 1 · You missed · \(minus)5 pts",
-            "Day 1 · Maya joined",
-            "Day 1 · You joined"
+        XCTAssertEqual(s.days, [
+            closed(2, kept: [ari, maya]),
+            closed(1, kept: [ari], forfeits: [forfeit(maya, amount: 5)], carriedIn: 10, share: 15),
+            closed(0, joined: [ari, maya], forfeits: [forfeit(ari, amount: 5), forfeit(maya, amount: 5)], carriedOut: 10)
         ])
-        let missed: LedgerLine = s.ledger[7]
-        XCTAssertEqual(missed.kind, .missed)
-        XCTAssertEqual(missed.amount ?? 0, -5, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger[5].kind, .carry)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "me"), -5, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 1, viewerID: "me"), 15, accuracy: 1e-9)
     }
 
     func testPotStillCarriedAfterLastClosedDay() {
@@ -154,12 +155,12 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(s.totalForfeited, 15, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 0, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -10, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger.first?.text, "Day 2 · Nobody kept · pot carries 10 pts")
+        XCTAssertEqual(s.days.first, closed(1, forfeits: [forfeit(ari, amount: 5), forfeit(maya, amount: 5)], carriedOut: 10))
     }
 
     // MARK: - Membership
 
-    func testJoinedDayRespected() {
+    func testJoinedDayRespected() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya", joinedDay: 2)]
         let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("me", 1), checkIn("me", 2), checkIn("me", 3)]
         let s: GroupSummary = summarize(makeGroup(testDay: 4), members, checkIns)
@@ -167,11 +168,13 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "maya")?.history ?? [], [DayOutcome.missed, DayOutcome.missed])
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 4, accuracy: 1e-9)
         XCTAssertEqual(s.totalForfeited, 4, accuracy: 1e-9)
-        XCTAssertTrue(texts(s).contains("Day 3 · Maya joined"))
-        XCTAssertFalse(texts(s).contains("Day 2 · Maya missed · \(minus)2 pts"))
+        XCTAssertEqual(try entry(s, 0).joined, [ari])
+        XCTAssertEqual(try entry(s, 1).forfeits, [])
+        XCTAssertEqual(try entry(s, 2).joined, [maya])
+        XCTAssertEqual(try entry(s, 2).forfeits, [forfeit(maya)])
     }
 
-    func testLeftDayRespected() {
+    func testLeftDayRespected() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya", leftDay: 2)]
         let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("me", 1), checkIn("me", 2), checkIn("me", 3),
                                        checkIn("maya", 0)]
@@ -180,11 +183,11 @@ final class SettlementTests: XCTestCase {
         XCTAssertNil(standing(s, "maya"))
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 2, accuracy: 1e-9)
         XCTAssertEqual(s.totalForfeited, 2, accuracy: 1e-9)
-        let t: [String] = texts(s)
-        XCTAssertTrue(t.contains("Day 2 · Maya missed · \(minus)2 pts"))
-        XCTAssertTrue(t.contains("Day 3 · Maya left"))
-        XCTAssertFalse(t.contains("Day 3 · Maya missed · \(minus)2 pts"))
-        XCTAssertFalse(t.contains("Day 4 · Maya missed · \(minus)2 pts"))
+        XCTAssertEqual(try entry(s, 1).forfeits, [forfeit(maya)])
+        XCTAssertEqual(try entry(s, 2).left, [maya])
+        XCTAssertEqual(try entry(s, 2).forfeits, [])
+        XCTAssertEqual(try entry(s, 3).forfeits, [])
+        XCTAssertEqual(try entry(s, 3).left, [])
     }
 
     func testViewerNilWhenNotAMember() {
@@ -207,8 +210,10 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "me")?.net ?? 99, -2, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "maya")?.history ?? [], [DayOutcome.kept])
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, 2, accuracy: 1e-9)
-        XCTAssertTrue(texts(s).contains("Day 1 · You joined"))
-        XCTAssertTrue(texts(s).contains("Day 2 · Maya joined"))
+        XCTAssertEqual(s.days, [
+            closed(1, joined: [maya], kept: [maya], forfeits: [forfeit(ari)], share: 2),
+            closed(0, joined: [ari], kept: [ari])
+        ])
     }
 
     // MARK: - Check-in validity
@@ -256,7 +261,7 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 2, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "me")?.history ?? [], [DayOutcome.kept])
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -2, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger.first?.text, "Day 1 · You collect +2 pts")
+        XCTAssertEqual(s.days, [closed(0, joined: [ari, maya], kept: [ari], forfeits: [forfeit(maya)], share: 2)])
     }
 
     // MARK: - Streaks and status
@@ -340,18 +345,8 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "maya")?.history ?? [], [DayOutcome.missed])
         XCTAssertEqual(standing(s, "maya")?.streak, 0)
         XCTAssertEqual(standing(s, "maya")?.missedYesterday, true)
-        XCTAssertEqual(texts(s), [
-            "Day 1 · You collect +1 pts",
-            "Day 1 · Pot split 2 ways · +1 pts each",
-            "Day 1 · Maya's check-in was overruled · \(minus)2 pts",
-            "Day 1 · You kept",
-            "Day 1 · Theo joined",
-            "Day 1 · Maya joined",
-            "Day 1 · You joined"
-        ])
-        XCTAssertEqual(s.ledger[2].kind, .forfeit)
-        XCTAssertEqual(s.ledger[2].id, "d0-forfeit-maya")
-        XCTAssertNil(s.ledger[2].amount)
+        XCTAssertEqual(s.days, [closed(0, joined: [ari, maya, theo], kept: [ari, theo],
+                                       forfeits: [forfeit(maya, .checkInOverruled)], share: 1)])
 
         // One "Doesn't count" of two voters isn't more than half: the check-in stands.
         let stands: GroupSummary = summarize(makeGroup(testDay: 1), members, checkIns, votes: [against("me", "maya", 0)])
@@ -364,20 +359,14 @@ final class SettlementTests: XCTestCase {
         let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("maya", 0), checkIn("theo", 0)]
         let votes: [VoteInfo] = [against("me", "maya", 0), against("theo", "maya", 0)]
         let s: GroupSummary = summarize(makeGroup(testDay: 1), members, checkIns, votes: votes, viewer: "maya")
-        XCTAssertEqual(texts(s), [
-            "Day 1 · Pot split 2 ways · +1 pts each",
-            "Day 1 · Your check-in was overruled · \(minus)2 pts",
-            "Day 1 · Theo joined",
-            "Day 1 · You joined",
-            "Day 1 · Ari joined"
-        ])
-        XCTAssertEqual(s.ledger[1].kind, .missed)
-        XCTAssertEqual(s.ledger[1].id, "d0-missed-maya")
-        XCTAssertEqual(s.ledger[1].amount ?? 0, -2, accuracy: 1e-9)
-        XCTAssertEqual(Digest.viewerChange(s.ledger, day: 0), -2, accuracy: 1e-9)
+        // The ledger reads the same for every viewer; only the UI says "You".
+        XCTAssertEqual(s.days, summarize(makeGroup(testDay: 1), members, checkIns, votes: votes).days)
+        XCTAssertEqual(s.viewer?.net ?? 99, -2, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "maya"), -2, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "me"), 1, accuracy: 1e-9)
     }
 
-    func testOverruledExcuseIsAMiss() {
+    func testOverruledExcuseIsAMiss() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya"), member("theo", "Theo")]
         let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("theo", 0)]
         let votes: [VoteInfo] = [against("me", "maya", 0), against("theo", "maya", 0)]
@@ -386,16 +375,15 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(s, "maya")?.history ?? [], [DayOutcome.missed])
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -2, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 1, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger[2].text, "Day 1 · Maya's excuse was overruled · \(minus)2 pts")
-        XCTAssertEqual(s.ledger[2].kind, .forfeit)
-        XCTAssertEqual(s.ledger[2].id, "d0-forfeit-maya")
+        let d: LedgerDay = try entry(s, 0)
+        XCTAssertEqual(d.forfeits, [forfeit(maya, .excuseOverruled)])
+        XCTAssertEqual(d.excused, [])
+        XCTAssertEqual(d.kept, [ari, theo])
 
         let mine: GroupSummary = summarize(makeGroup(testDay: 1), members, checkIns, excuses: [excuse("maya", 0)],
                                            votes: votes, viewer: "maya")
-        XCTAssertEqual(mine.ledger[1].text, "Day 1 · Your excuse was overruled · \(minus)2 pts")
-        XCTAssertEqual(mine.ledger[1].kind, .missed)
-        XCTAssertEqual(mine.ledger[1].id, "d0-missed-maya")
-        XCTAssertEqual(mine.ledger[1].amount ?? 0, -2, accuracy: 1e-9)
+        XCTAssertEqual(mine.days, s.days)
+        XCTAssertEqual(Digest.viewerChange(mine.days, day: 0, viewerID: "maya"), -2, accuracy: 1e-9)
     }
 
     // MARK: - Excuses
@@ -406,28 +394,13 @@ final class SettlementTests: XCTestCase {
         let s: GroupSummary = summarize(makeGroup(testDay: 3), members, checkIns, excuses: [excuse("me", 1)])
 
         // Day 2: you sit out, so Theo's forfeit goes to Maya alone and you neither pay nor collect.
-        XCTAssertEqual(texts(s), [
-            "Day 3 · You collect +4 pts",
-            "Day 3 · Pot split 1 way · +4 pts each",
-            "Day 3 · Theo missed · \(minus)2 pts",
-            "Day 3 · Maya missed · \(minus)2 pts",
-            "Day 3 · You kept",
-            "Day 2 · Pot split 1 way · +2 pts each",
-            "Day 2 · Theo missed · \(minus)2 pts",
-            "Day 2 · You were excused",
-            "Day 1 · You collect +1 pts",
-            "Day 1 · Pot split 2 ways · +1 pts each",
-            "Day 1 · Theo missed · \(minus)2 pts",
-            "Day 1 · You kept",
-            "Day 1 · Theo joined",
-            "Day 1 · Maya joined",
-            "Day 1 · You joined"
+        XCTAssertEqual(s.days, [
+            closed(2, kept: [ari], forfeits: [forfeit(maya), forfeit(theo)], share: 4),
+            closed(1, kept: [maya], excused: [ari], forfeits: [forfeit(theo)], share: 2),
+            closed(0, joined: [ari, maya, theo], kept: [ari, maya], forfeits: [forfeit(theo)], share: 1)
         ])
-        let excused: LedgerLine = s.ledger[7]
-        XCTAssertEqual(excused.kind, .excused)
-        XCTAssertEqual(excused.id, "d1-excused-me")
-        XCTAssertNil(excused.amount)
-        XCTAssertEqual(Digest.viewerChange(s.ledger, day: 1), 0, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 1, viewerID: "me"), 0, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 1, viewerID: "maya"), 2, accuracy: 1e-9)
 
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 5, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, 1, accuracy: 1e-9)
@@ -443,28 +416,23 @@ final class SettlementTests: XCTestCase {
 
         let theirs: GroupSummary = summarize(makeGroup(testDay: 3), members, checkIns, excuses: [excuse("me", 1)],
                                              viewer: "theo")
-        XCTAssertTrue(texts(theirs).contains("Day 2 · Ari was excused"))
+        XCTAssertEqual(theirs.days, s.days)
     }
 
-    func testEveryoneExcusedCarriesThePotUntouched() {
+    func testEveryoneExcusedCarriesThePotUntouched() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya")]
         let excuses: [ExcuseInfo] = [excuse("me", 1), excuse("maya", 1)]
         let s: GroupSummary = summarize(makeGroup(testDay: 3, stake: 5), members, [checkIn("me", 2)], excuses: excuses)
-        XCTAssertEqual(texts(s), [
-            "Day 3 · You collect +15 pts",
-            "Day 3 · Pot split 1 way · +15 pts each",
-            "Day 3 · Maya missed · \(minus)5 pts",
-            "Day 3 · You kept",
-            "Day 2 · Maya was excused",
-            "Day 2 · You were excused",
-            "Day 1 · Nobody kept · pot carries 10 pts",
-            "Day 1 · Maya missed · \(minus)5 pts",
-            "Day 1 · You missed · \(minus)5 pts",
-            "Day 1 · Maya joined",
-            "Day 1 · You joined"
+        XCTAssertEqual(s.days, [
+            closed(2, kept: [ari], forfeits: [forfeit(maya, amount: 5)], carriedIn: 10, share: 15),
+            closed(1, excused: [ari, maya], carriedIn: 10, carriedOut: 10),
+            closed(0, joined: [ari, maya], forfeits: [forfeit(ari, amount: 5), forfeit(maya, amount: 5)], carriedOut: 10)
         ])
-        XCTAssertEqual(s.ledger[4].kind, .excused)
-        XCTAssertEqual(s.ledger[4].id, "d1-excused-maya")
+        // Day 1 moves nothing: no forfeits, no share, and the carry goes on as it came in.
+        let sitOut: LedgerDay = try entry(s, 1)
+        XCTAssertTrue(sitOut.forfeits.isEmpty)
+        XCTAssertEqual(sitOut.share, 0, accuracy: 1e-9)
+        XCTAssertEqual(sitOut.carriedOut, sitOut.carriedIn, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 10, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -10, accuracy: 1e-9)
         XCTAssertEqual(s.totalForfeited, 15, accuracy: 1e-9)
@@ -475,26 +443,28 @@ final class SettlementTests: XCTestCase {
         // Before day 3 settles, the pot still holds day 1's 10 pts.
         let carried: GroupSummary = summarize(makeGroup(testDay: 2, stake: 5), members, [], excuses: excuses)
         XCTAssertEqual(carried.pot, 10, accuracy: 1e-9)
-        XCTAssertEqual(carried.ledger.first?.text, "Day 2 · Maya was excused")
+        XCTAssertEqual(carried.days.first, closed(1, excused: [ari, maya], carriedIn: 10, carriedOut: 10))
     }
 
-    func testCheckInWinsOverAnExcuse() {
+    func testCheckInWinsOverAnExcuse() throws {
         let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya")]
         let checkIns: [CheckInInfo] = [checkIn("maya", 0), checkIn("maya", 1)]
         let excuses: [ExcuseInfo] = [excuse("maya", 0), excuse("maya", 1)]
         let s: GroupSummary = summarize(makeGroup(testDay: 1), members, checkIns, excuses: excuses)
-        let maya: MemberStanding? = standing(s, "maya")
-        XCTAssertEqual(maya?.history ?? [], [DayOutcome.kept])
-        XCTAssertEqual(maya?.checkedInToday, true)
-        XCTAssertEqual(maya?.excusedToday, false)
-        XCTAssertEqual(maya?.streak, 2)
-        XCTAssertFalse(texts(s).contains { (text: String) -> Bool in text.contains("excused") })
+        let hers: MemberStanding? = standing(s, "maya")
+        XCTAssertEqual(hers?.history ?? [], [DayOutcome.kept])
+        XCTAssertEqual(hers?.checkedInToday, true)
+        XCTAssertEqual(hers?.excusedToday, false)
+        XCTAssertEqual(hers?.streak, 2)
+        XCTAssertEqual(try entry(s, 0).kept, [maya])
+        XCTAssertEqual(try entry(s, 0).excused, [])
 
         // Overruling the check-in leaves a miss: the excuse doesn't stand in for it.
         let overruled: GroupSummary = summarize(makeGroup(testDay: 1), members, checkIns, excuses: excuses,
                                                 votes: [against("me", "maya", 0)])
         XCTAssertEqual(standing(overruled, "maya")?.history ?? [], [DayOutcome.missed])
-        XCTAssertTrue(texts(overruled).contains("Day 1 · Maya's check-in was overruled · \(minus)2 pts"))
+        XCTAssertEqual(try entry(overruled, 0).forfeits, [forfeit(ari), forfeit(maya, .checkInOverruled)])
+        XCTAssertEqual(try entry(overruled, 0).excused, [])
     }
 
     func testExcuseValidityMatchesCheckIns() {
@@ -588,5 +558,109 @@ final class SettlementTests: XCTestCase {
         XCTAssertEqual(standing(fewer, "maya")?.todayOverruled, false)
         XCTAssertEqual(standing(fewer, "maya")?.streak, 2)
         XCTAssertEqual(fewer.standings.filter({ (m: MemberStanding) -> Bool in Digest.checkInStands(m) }).count, 1)
+    }
+
+    // MARK: - Ledger days
+
+    func testOneForfeitSplitsAmongTwoKeepers() throws {
+        let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya"), member("theo", "Theo")]
+        let s: GroupSummary = summarize(makeGroup(testDay: 1, stake: 5), members, [checkIn("me", 0), checkIn("maya", 0)])
+        let d: LedgerDay = try entry(s, 0)
+        XCTAssertEqual(d.kept, [ari, maya])
+        XCTAssertEqual(d.forfeits, [forfeit(theo, amount: 5)])
+        XCTAssertEqual(d.share, 2.5, accuracy: 1e-9)
+
+        // Activity draws one line per keeper from the forfeit: 5 / 2 each, which is the whole share.
+        let each: Double = d.forfeits[0].amount / Double(d.kept.count)
+        XCTAssertEqual(each, 2.5, accuracy: 1e-9)
+        XCTAssertEqual(each, d.share, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "me")?.net ?? 99, 2.5, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "maya")?.net ?? 99, 2.5, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "theo")?.net ?? 99, -5, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "maya"), 2.5, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(s.days, day: 0, viewerID: "theo"), -5, accuracy: 1e-9)
+    }
+
+    func testACarryAcrossANobodyKeptDayIsPaidOut() throws {
+        // Day 0: nobody keeps, so 6 pts carry. Day 1: you and Maya keep and Theo misses. Day 2: all keep.
+        let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya"), member("theo", "Theo")]
+        let checkIns: [CheckInInfo] = [checkIn("me", 1), checkIn("maya", 1), checkIn("me", 2), checkIn("maya", 2),
+                                       checkIn("theo", 2)]
+        let s: GroupSummary = summarize(makeGroup(testDay: 3), members, checkIns)
+
+        let nobody: LedgerDay = try entry(s, 0)
+        XCTAssertEqual(nobody.kept, [])
+        XCTAssertEqual(nobody.forfeits, [forfeit(ari), forfeit(maya), forfeit(theo)])
+        XCTAssertEqual(nobody.share, 0, accuracy: 1e-9)
+        XCTAssertEqual(nobody.carriedOut, 6, accuracy: 1e-9)
+
+        let paid: LedgerDay = try entry(s, 1)
+        XCTAssertEqual(paid.kept, [ari, maya])
+        XCTAssertEqual(paid.carriedIn, 6, accuracy: 1e-9)
+        XCTAssertEqual(paid.share, 4, accuracy: 1e-9)
+        XCTAssertEqual(paid.carriedOut, 0, accuracy: 1e-9)
+        // Each keeper: 3 from the carry and 1 from Theo's forfeit.
+        let fromCarry: Double = paid.carriedIn / Double(paid.kept.count)
+        var fromForfeits: Double = 0
+        for f in paid.forfeits {
+            fromForfeits += f.amount / Double(paid.kept.count)
+        }
+        XCTAssertEqual(fromCarry, 3, accuracy: 1e-9)
+        XCTAssertEqual(fromForfeits, 1, accuracy: 1e-9)
+        XCTAssertEqual(fromCarry + fromForfeits, paid.share, accuracy: 1e-9)
+
+        XCTAssertEqual(try entry(s, 2), closed(2, kept: [ari, maya, theo]))
+        XCTAssertEqual(s.pot, 0, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "me")?.net ?? 99, 2, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "maya")?.net ?? 99, 2, accuracy: 1e-9)
+        XCTAssertEqual(standing(s, "theo")?.net ?? 99, -4, accuracy: 1e-9)
+        var sum: Double = 0
+        for m in s.standings {
+            sum += m.net
+        }
+        XCTAssertEqual(sum, -s.pot, accuracy: 1e-9)
+    }
+
+    func testForfeitsSayWhyTheStakeWasLost() throws {
+        // Maya's check-in and Theo's excuse are overruled (two of three each); Zed has no claim.
+        let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya"), member("theo", "Theo"),
+                                     member("zed", "Zed")]
+        let votes: [VoteInfo] = [against("me", "maya", 0), against("zed", "maya", 0),
+                                 against("me", "theo", 0), against("maya", "theo", 0)]
+        let s: GroupSummary = summarize(makeGroup(testDay: 1), members, [checkIn("me", 0), checkIn("maya", 0)],
+                                        excuses: [excuse("theo", 0)], votes: votes)
+        let d: LedgerDay = try entry(s, 0)
+        XCTAssertEqual(d.forfeits, [forfeit(maya, .checkInOverruled), forfeit(theo, .excuseOverruled), forfeit(zed)])
+        XCTAssertEqual(d.kept, [ari])
+        XCTAssertEqual(d.excused, [])
+        XCTAssertEqual(d.share, 6, accuracy: 1e-9)
+    }
+
+    func testTodayListsItsJoinsAndLeavesOnly() throws {
+        // Today is day 2: Lou joins and Maya leaves. You and Lou have already checked in.
+        let members: [MemberInfo] = [member("me", "Ari"), member("maya", "Maya", leftDay: 2),
+                                     member("lou", "Lou", joinedDay: 2)]
+        let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("me", 1), checkIn("me", 2), checkIn("lou", 2)]
+        let s: GroupSummary = summarize(makeGroup(testDay: 2), members, checkIns)
+        XCTAssertEqual(s.days.first, LedgerDay(day: 2, isClosed: false, joined: [lou], left: [maya], kept: [], excused: [],
+                                               forfeits: [], carriedIn: 0, share: 0, carriedOut: 0))
+        XCTAssertTrue(try entry(s, 1).isClosed)
+        XCTAssertEqual(s.pot, 0, accuracy: 1e-9)
+
+        // A day later it has closed: the same joins and leaves, now with its outcomes.
+        let later: GroupSummary = summarize(makeGroup(testDay: 3), members, checkIns)
+        XCTAssertEqual(try entry(later, 2), closed(2, joined: [lou], left: [maya], kept: [ari, lou]))
+        XCTAssertNil(later.days.first(where: { (d: LedgerDay) -> Bool in d.day == 3 }))
+    }
+
+    func testTheLedgerListsTheLatestDays() {
+        // A solo member misses 130 days in a row: every day settles, the ledger keeps the newest 120.
+        let s: GroupSummary = summarize(makeGroup(testDay: 130), [member("me", "Ari")], [])
+        XCTAssertEqual(s.days.count, Settlement.dayCap)
+        XCTAssertEqual(s.days.first?.day, 129)
+        XCTAssertEqual(s.days.last?.day, 10)
+        XCTAssertEqual(s.totalForfeited, 260, accuracy: 1e-9)
+        XCTAssertEqual(s.pot, 260, accuracy: 1e-9)
+        XCTAssertEqual(s.days.first?.carriedOut ?? 0, 260, accuracy: 1e-9)
     }
 }

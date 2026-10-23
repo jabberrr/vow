@@ -15,12 +15,15 @@ enum Overview {
         return total
     }
 
-    /// Sum of your signed ledger amounts on each real group's previous day. A finished vow has no
-    /// yesterday (its `currentDay` stays at the day after the final one).
+    /// What each real group's previous day did to your net, summed. You are each summary's viewer: a group
+    /// you are no member of has no standing for you, and nothing to add. A finished vow has no yesterday
+    /// (its `currentDay` stays at the day after the final one).
     static func yesterdayChange(_ all: [GroupID: GroupSummary], tests: Set<GroupID>) -> Double {
         var total: Double = 0
         for (id, summary) in all where !tests.contains(id) && !summary.isFinished {
-            total += Digest.viewerChange(summary.ledger, day: summary.currentDay - 1)
+            if let viewer: MemberStanding = summary.viewer {
+                total += Digest.viewerChange(summary.days, day: summary.currentDay - 1, viewerID: viewer.userID)
+            }
         }
         return total
     }

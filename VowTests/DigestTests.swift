@@ -2,8 +2,14 @@ import XCTest
 @testable import Vow
 
 final class DigestTests: XCTestCase {
-    private func line(_ id: String, _ day: Int, _ kind: LedgerLine.Kind, _ amount: Double?) -> LedgerLine {
-        return LedgerLine(id: id, day: day, kind: kind, text: "", amount: amount)
+    private let ari: LedgerPerson = LedgerPerson(userID: "me", name: "Ari")
+    private let maya: LedgerPerson = LedgerPerson(userID: "maya", name: "Maya")
+    private let theo: LedgerPerson = LedgerPerson(userID: "theo", name: "Theo")
+
+    private func closed(_ day: Int, kept: [LedgerPerson] = [], excused: [LedgerPerson] = [], forfeits: [Forfeit] = [],
+                        share: Double = 0) -> LedgerDay {
+        return LedgerDay(day: day, isClosed: true, joined: [], left: [], kept: kept, excused: excused, forfeits: forfeits,
+                         carriedIn: 0, share: share, carriedOut: 0)
     }
 
     private func standing(_ id: String, _ name: String, net: Double, history: [DayOutcome] = [], today: Bool = false,
@@ -13,17 +19,20 @@ final class DigestTests: XCTestCase {
                               excusedToday: excused, todayOverruled: overruled)
     }
 
-    func testViewerChangeSumsOnlyThatDaysOwnAmounts() {
-        let ledger: [LedgerLine] = [
-            line("a", 3, .missed, -2),
-            line("b", 3, .payout, 1.33),
-            line("c", 3, .kept, nil),
-            line("d", 3, .forfeit, nil),
-            line("e", 2, .payout, 5)
+    func testViewerChangeIsTheShareKeptOrTheStakeLost() {
+        let days: [LedgerDay] = [
+            closed(4, kept: [maya], excused: [ari], forfeits: [Forfeit(person: theo, reason: .missed, amount: 2)],
+                   share: 2),
+            closed(3, kept: [ari, maya], forfeits: [Forfeit(person: theo, reason: .excuseOverruled, amount: 2)], share: 1),
+            closed(2, kept: [maya], forfeits: [Forfeit(person: ari, reason: .checkInOverruled, amount: 2)], share: 2)
         ]
-        XCTAssertEqual(Digest.viewerChange(ledger, day: 3), -0.67, accuracy: 0.0001)
-        XCTAssertEqual(Digest.viewerChange(ledger, day: 2), 5, accuracy: 0.0001)
-        XCTAssertEqual(Digest.viewerChange(ledger, day: 9), 0, accuracy: 0.0001)
+        XCTAssertEqual(Digest.viewerChange(days, day: 3, viewerID: "me"), 1, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(days, day: 2, viewerID: "me"), -2, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(days, day: 4, viewerID: "me"), 0, accuracy: 1e-9)      // excused
+        XCTAssertEqual(Digest.viewerChange(days, day: 3, viewerID: "theo"), -2, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(days, day: 4, viewerID: "maya"), 2, accuracy: 1e-9)
+        XCTAssertEqual(Digest.viewerChange(days, day: 9, viewerID: "me"), 0, accuracy: 1e-9)      // not listed
+        XCTAssertEqual(Digest.viewerChange(days, day: 3, viewerID: "stranger"), 0, accuracy: 1e-9)
     }
 
     func testDaysKeptCountsToday() {
@@ -66,7 +75,7 @@ final class DigestTests: XCTestCase {
     func testAnExcuseClosesToday() {
         func open(_ viewer: MemberStanding) -> Bool {
             return Digest.isOpen(GroupSummary(currentDay: 4, cycle: 1, dayInCycle: 5, glyphNumber: 5, pot: 0,
-                                              totalForfeited: 0, standings: [viewer], ledger: [], viewer: viewer))
+                                              totalForfeited: 0, standings: [viewer], days: [], viewer: viewer))
         }
         XCTAssertTrue(open(standing("me", "Me", net: 0)))
         XCTAssertFalse(open(standing("me", "Me", net: 0, excused: true)))
@@ -94,22 +103,22 @@ final class DigestTests: XCTestCase {
         XCTAssertFalse(DayWindow.isAtRisk(group, now: evening))
     }
 
-    private func summary(day: Int, net: Double, ledger: [LedgerLine], kept: Bool, history: [DayOutcome], best: Int) -> GroupSummary {
+    private func summary(day: Int, net: Double, days: [LedgerDay], kept: Bool, history: [DayOutcome], best: Int) -> GroupSummary {
         let viewer: MemberStanding = MemberStanding(userID: "me", displayName: "Me", vow: "I will read", isActive: true,
                                                     net: net, streak: 0, bestStreak: best, history: history,
                                                     checkedInToday: kept, missedYesterday: false)
         return GroupSummary(currentDay: day, cycle: day / 30 + 1, dayInCycle: day % 30 + 1, glyphNumber: day + 1,
-                            pot: 0, totalForfeited: 0, standings: [viewer], ledger: ledger, viewer: viewer)
+                            pot: 0, totalForfeited: 0, standings: [viewer], days: days, viewer: viewer)
     }
 
     func testOverviewSkipsTestGroupsExceptInTheBalance() {
         let real: GroupID = GroupID(zoneName: "r", ownerName: "o")
         let test: GroupID = GroupID(zoneName: "t", ownerName: "o")
         let all: [GroupID: GroupSummary] = [
-            real: summary(day: 4, net: 3, ledger: [line("a", 3, .payout, 1.5)], kept: true,
+            real: summary(day: 4, net: 3, days: [closed(3, kept: [ari], share: 1.5)], kept: true,
                           history: [.kept, .kept, .missed, .kept], best: 2),
-            test: summary(day: 9, net: -2, ledger: [line("b", 8, .missed, -2)], kept: true,
-                          history: [.kept, .kept, .kept, .kept, .kept], best: 5)
+            test: summary(day: 9, net: -2, days: [closed(8, forfeits: [Forfeit(person: ari, reason: .missed, amount: 2)])],
+                          kept: true, history: [.kept, .kept, .kept, .kept, .kept], best: 5)
         ]
         let tests: Set<GroupID> = [test]
         XCTAssertEqual(Overview.balance(all), 1, accuracy: 0.0001)

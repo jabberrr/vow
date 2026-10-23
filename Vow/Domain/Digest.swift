@@ -1,12 +1,16 @@
 import Foundation
 
 enum Digest {
-    /// Sum of the viewer's own signed amounts on `day` (missed = -stake, payout = +share).
-    static func viewerChange(_ ledger: [LedgerLine], day: Int) -> Double {
+    /// What `day` did to the viewer's net: the share if they kept it, minus the stake if they forfeited it.
+    /// 0 when they sat it out, it is still open, or it isn't listed.
+    static func viewerChange(_ days: [LedgerDay], day: Int, viewerID: String) -> Double {
         var total: Double = 0
-        for line in ledger where line.day == day {
-            if let amount: Double = line.amount {
-                total += amount
+        for entry in days where entry.day == day {
+            for p in entry.kept where p.userID == viewerID {
+                total += entry.share
+            }
+            for forfeit in entry.forfeits where forfeit.person.userID == viewerID {
+                total -= forfeit.amount
             }
         }
         return total

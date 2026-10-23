@@ -31,47 +31,35 @@ final class ChatTextTests: XCTestCase {
 
     // MARK: - Status
 
-    func testOpenWithCountsVotes() {
-        XCTAssertEqual(ChatText.status(tally(counts: 2), today: 9, isTest: false),
-                       "2 say it counts · Voting ends tomorrow night")
-        XCTAssertEqual(ChatText.status(tally(counts: 1), today: 9, isTest: false),
-                       "1 says it counts · Voting ends tomorrow night")
+    func testOpenSaysHowManyItTakesAndWhenVotingEnds() {
+        XCTAssertEqual(ChatText.status(tally(), today: 9, isTest: false),
+                       "2 needed to overrule · Voting ends tomorrow night")
+        // The buttons carry the counts, so the line doesn't repeat them.
+        XCTAssertEqual(ChatText.status(tally(counts: 2, against: 1), today: 9, isTest: false),
+                       "2 needed to overrule · Voting ends tomorrow night")
     }
 
     func testYesterdaysClaimClosesTonight() {
         XCTAssertEqual(ChatText.status(tally(day: 8, needed: 3, against: 1), today: 9, isTest: false),
-                       "1 of 3 needed to overrule · Voting ends tonight")
+                       "3 needed to overrule · Voting ends tonight")
     }
 
-    func testAgainstVotesTakeTheLineOverCountsVotes() {
-        XCTAssertEqual(ChatText.status(tally(counts: 2, against: 1), today: 9, isTest: false),
-                       "1 of 2 needed to overrule · Voting ends tomorrow night")
-    }
-
-    func testOverruledWhileVotingIsOpen() {
-        XCTAssertEqual(ChatText.status(tally(day: 8, against: 3), today: 9, isTest: false),
-                       "3 said it doesn't count · Voting ends tonight")
-    }
-
-    func testOpenWithoutVotesSaysOnlyWhenItEnds() {
-        XCTAssertEqual(ChatText.status(tally(), today: 9, isTest: false), "Voting ends tomorrow night")
+    func testOverruledWhileVotingIsOpenLeavesTheVerdictToTheTag() {
+        XCTAssertEqual(ChatText.status(tally(day: 8, against: 3), today: 9, isTest: false), "Voting ends tonight")
     }
 
     func testClosed() {
-        XCTAssertEqual(ChatText.status(tally(day: 7, against: 3, isOpen: false), today: 9, isTest: false),
-                       "Closed · 3 said it doesn't count")
-        XCTAssertEqual(ChatText.status(tally(day: 7, counts: 2, isOpen: false), today: 9, isTest: false),
-                       "Closed · 2 said it counts")
-        XCTAssertEqual(ChatText.status(tally(day: 7, counts: 1, isOpen: false), today: 9, isTest: false),
-                       "Closed · 1 said it counts")
+        XCTAssertEqual(ChatText.status(tally(day: 7, against: 3, isOpen: false), today: 9, isTest: false), "Closed")
+        XCTAssertEqual(ChatText.status(tally(day: 7, counts: 2, isOpen: false), today: 9, isTest: false), "Closed")
         XCTAssertEqual(ChatText.status(tally(day: 7, isOpen: false), today: 9, isTest: false), "Closed")
     }
 
     func testATestGroupNamesTheDayThatClosesVoting() {
         // Day index 3 is "Day 4"; voting closes when the day after next, "Day 6", begins.
-        XCTAssertEqual(ChatText.status(tally(day: 3), today: 3, isTest: true), "Voting ends when Day 6 begins")
-        XCTAssertEqual(ChatText.status(tally(day: 3, counts: 1), today: 4, isTest: true),
-                       "1 says it counts · Voting ends when Day 6 begins")
+        XCTAssertEqual(ChatText.status(tally(day: 3), today: 3, isTest: true),
+                       "2 needed to overrule · Voting ends when Day 6 begins")
+        XCTAssertEqual(ChatText.status(tally(day: 3, needed: 1, against: 1), today: 4, isTest: true),
+                       "Voting ends when Day 6 begins")
     }
 
     func testASoloClaimHasNoStatus() {
@@ -79,8 +67,14 @@ final class ChatTextTests: XCTestCase {
     }
 
     func testStatusIsSpokenAsSentences() {
-        XCTAssertEqual(ChatText.spoken("2 say it counts · Voting ends tomorrow night"),
-                       "2 say it counts. Voting ends tomorrow night")
+        XCTAssertEqual(ChatText.spoken("2 needed to overrule · Voting ends tomorrow night"),
+                       "2 needed to overrule. Voting ends tomorrow night")
+    }
+
+    func testVoteCountsAreSpokenWithTheirButtons() {
+        XCTAssertEqual(ChatText.voteCount(0), "No votes")
+        XCTAssertEqual(ChatText.voteCount(1), "1 vote")
+        XCTAssertEqual(ChatText.voteCount(3), "3 votes")
     }
 
     // MARK: - Cards
@@ -107,9 +101,23 @@ final class ChatTextTests: XCTestCase {
     }
 
     func testMessageValue() {
-        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: false, failed: false), "8:21 PM")
-        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: true, failed: false), "Sending")
-        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: false, failed: true), "Not sent")
+        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: false, failed: false, reactions: []), "8:21 PM")
+        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: true, failed: false, reactions: []), "Sending")
+        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: false, failed: true, reactions: []), "Not sent")
+    }
+
+    // MARK: - Reactions
+
+    func testAMessagesValueListsItsReactions() {
+        let reactions: [ReactionCount] = [ReactionCount(emoji: "❤️", userIDs: ["maya", "sam"], mine: false),
+                                          ReactionCount(emoji: "😂", userIDs: ["me"], mine: true)]
+        XCTAssertEqual(ChatText.messageValue(time: "8:21 PM", sending: false, failed: false, reactions: reactions),
+                       "8:21 PM, 2 ❤️, 1 😂")
+    }
+
+    func testReactActions() {
+        XCTAssertEqual(ChatText.reactAction("❤️", isMine: false), "React with ❤️")
+        XCTAssertEqual(ChatText.reactAction("❤️", isMine: true), "Remove ❤️")
     }
 
     // MARK: - Feed

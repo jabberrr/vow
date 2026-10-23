@@ -1,7 +1,8 @@
 import Foundation
 
-/// The Chat tab's wording: card titles, the status line, day headers, pointers and the "+" card. Pure, so
-/// every phrasing can be tested; dates follow the group's time zone in the given locale.
+/// The Chat tab's wording: card titles, the status line and vote counts, day headers, pointers, reactions
+/// and the "+" card. Pure, so every phrasing can be tested; dates follow the group's time zone in the given
+/// locale.
 enum ChatText {
     /// A claim's time while it saves: "Run 5k before work · Sending…".
     static let sending: String = "Sending…"
@@ -32,19 +33,18 @@ enum ChatText {
         return parts.joined(separator: ", ")
     }
 
-    /// The card's status line, with one denominator ("needed"): the votes so far and when voting ends, or
-    /// "Closed" and the votes once it has. nil without voters (a solo group), where nothing can be overruled.
-    /// "2 say it counts · Voting ends tomorrow night", "Closed · 3 said it doesn't count", "Closed".
+    /// The card's status line under its vote buttons. The buttons carry the counts and the header's
+    /// "Overruled" tag the verdict, so the line says how many it takes to overrule (until it is) and when
+    /// voting ends, or "Closed" once it has. nil without voters (a solo group), where nothing can be
+    /// overruled. "2 needed to overrule · Voting ends tomorrow night", "Voting ends tonight", "Closed".
     static func status(_ tally: ClaimTally, today: Int, isTest: Bool) -> String? {
         guard tally.voters > 0 else { return nil }
-        let said: String? = votes(tally)
-        if tally.isOpen {
-            let ends: String = window(day: tally.day, today: today, isTest: isTest)
-            guard let count: String = said else { return ends }
-            return count + " · " + ends
+        guard tally.isOpen else { return "Closed" }
+        let ends: String = window(day: tally.day, today: today, isTest: isTest)
+        if tally.overruled {
+            return ends
         }
-        guard let count: String = said else { return "Closed" }
-        return "Closed · " + count
+        return "\(tally.needed) needed to overrule · " + ends
     }
 
     /// When voting on day `day` ends: at the end of the next day, so "tomorrow night" for today's claims and
@@ -56,33 +56,23 @@ enum ChatText {
         return day >= today ? "Voting ends tomorrow night" : "Voting ends tonight"
     }
 
-    /// "1 of 3 needed to overrule" until enough say it doesn't count, then "3 said it doesn't count". With no
-    /// "Doesn't count" votes, "2 say it counts" ("said" once voting has closed). nil without votes.
-    static func votes(_ tally: ClaimTally) -> String? {
-        let against: Int = tally.againstVotes
-        if tally.needed > 0 && against >= tally.needed {
-            return "\(against) said it doesn't count"
-        }
-        if against > 0 {
-            return "\(against) of \(tally.needed) needed to overrule"
-        }
-        let n: Int = tally.countsVotes
-        guard n > 0 else { return nil }
-        if tally.isOpen {
-            return n == 1 ? "1 says it counts" : "\(n) say it counts"
-        }
-        return n == 1 ? "1 said it counts" : "\(n) said it counts"
-    }
-
     /// "Counts" or "Doesn't count": a vote, as the controls and the list of who voted say it.
     static func vote(_ counts: Bool) -> String {
         return counts ? "Counts" : "Doesn't count"
     }
 
+    /// A vote button's VoiceOver value, for the number beside it: "No votes", "1 vote", "3 votes".
+    static func voteCount(_ n: Int) -> String {
+        if n == 0 {
+            return "No votes"
+        }
+        return n == 1 ? "1 vote" : "\(n) votes"
+    }
+
     /// Why the other choice is off once your vote can't change (`Review.canChangeVote`), for VoiceOver.
     static let voteLocked: String = "Votes can't change in the last \(Int(Review.voteChangeMargin / 60)) minutes"
 
-    /// A line read as sentences: "2 say it counts. Voting ends tonight".
+    /// A line read as sentences: "2 needed to overrule. Voting ends tonight".
     static func spoken(_ line: String) -> String {
         return line.replacingOccurrences(of: " · ", with: ". ")
     }
@@ -119,12 +109,22 @@ enum ChatText {
         return shows + " Each one counts unless the group overrules it by the end of the next day."
     }
 
-    /// A message's VoiceOver value: its time, "Sending" or "Not sent".
-    static func messageValue(time: String, sending: Bool, failed: Bool) -> String {
-        if failed {
-            return "Not sent"
+    /// A message's VoiceOver value: its time, "Sending" or "Not sent", then its reactions: "8:21 PM, 2 ❤️,
+    /// 1 😂".
+    static func messageValue(time: String, sending: Bool, failed: Bool, reactions: [ReactionCount]) -> String {
+        var parts: [String] = [failed ? "Not sent" : (sending ? "Sending" : time)]
+        for reaction in reactions {
+            parts.append("\(reaction.count) \(reaction.emoji)")
         }
-        return sending ? "Sending" : time
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: - Reactions
+
+    /// A message's VoiceOver action for one of `Reactions.choices`: "React with ❤️", or "Remove ❤️" for the
+    /// one you have, which takes it back.
+    static func reactAction(_ emoji: String, isMine: Bool) -> String {
+        return isMine ? "Remove " + emoji : "React with " + emoji
     }
 
     // MARK: - "+" card

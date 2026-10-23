@@ -27,11 +27,16 @@ final class FormattersTests: XCTestCase {
         XCTAssertEqual(VoteRuleText.title(.majority), "More than half")
         XCTAssertEqual(VoteRuleText.title(.twoThirds), "Two thirds")
         XCTAssertEqual(VoteRuleText.title(.everyone), "Everyone")
+        XCTAssertEqual(VoteRuleText.title(.count(1)), "1 vote")
+        XCTAssertEqual(VoteRuleText.title(.count(2)), "2 votes")
+        XCTAssertEqual(VoteRuleText.title(.count(12)), "12 votes")
         let tail: String = " they don't, by the end of the next day."
         XCTAssertEqual(VoteRuleText.summary(.majority),
                        "Check-ins and excuses count unless more than half of the others say" + tail)
         XCTAssertEqual(VoteRuleText.summary(.twoThirds),
                        "Check-ins and excuses count unless two thirds of the others say" + tail)
         XCTAssertEqual(VoteRuleText.summary(.everyone), "Check-ins and excuses count unless everyone else says" + tail)
+        XCTAssertEqual(VoteRuleText.summary(.count(1)), "Check-ins and excuses count unless one of the others says" + tail)
+        XCTAssertEqual(VoteRuleText.summary(.count(2)), "Check-ins and excuses count unless 2 of the others say" + tail)
     }
 }

@@ -14,22 +14,28 @@ struct ChatActions {
     let openMedia: (String) -> Void
     /// "Write your vow to join", for someone who isn't a member yet. Never offered for a finished vow.
     let join: () -> Void
+    /// The page holds the touch for itself (true) or lets it go: while the "+" card or the reaction picker is
+    /// up, or while you type, the shell's swipes between tabs stand down, so a drag across a scrim, or one
+    /// that moves the cursor or selects text, never moves the page.
+    let overlay: (Bool) -> Void
 }
 
 /// The Chat tab: the group's messages, one card per check-in or excuse with its proof and votes, and the
 /// composer. The latest is at the bottom, where the page opens and where re-tapping the tab returns; the
 /// week up to the newest item shows until Earlier is tapped. There is no pull to refresh, since the top is
-/// history: the shell polls every 15 s while Chat is shown, the page refreshes on appear and after your
-/// votes, and the store refreshes after your other sends. The chat is marked seen on appear, on every change
-/// and on leaving, so the tab's dot never lights for what you are reading. Chat presents nothing itself; it
-/// asks the shell through `actions`. The shell ignores the keyboard, so the page lifts its own composer.
+/// history: the shell polls while Chat is shown, the page refreshes on appear and after your votes, and the
+/// store refreshes after your other sends. The chat is marked seen on appear, on every change and on
+/// leaving, so the tab's dot never lights for what you are reading. Chat presents nothing itself; it asks the
+/// shell through `actions`. Its own two overlays, the "+" card and the reaction picker, close when the sidebar
+/// covers the page. The shell ignores the keyboard, so the page lifts its own composer.
 struct ChatPage: View {
     let id: GroupID
     /// Bumped when the Chat tab is tapped again: scroll to the latest.
     let topToken: Int
     /// The group's unsent message, kept by the shell across tab and group switches.
     @Binding var draft: String
-    /// Something covers the page (the sidebar): the "+" card closes, as it would for a tap outside it.
+    /// Something covers the page (the sidebar): the "+" card and the reaction picker close, as they would
+    /// for a tap outside them.
     let covered: Bool
     let actions: ChatActions
 
@@ -44,6 +50,8 @@ struct ChatPage: View {
     /// must leave you where you were.
     @State private var hasOpened: Bool = false
     @State private var plusOpen: Bool = false
+    /// The message a long press opened the reaction picker over.
+    @State private var reactingID: String? = nil
     /// The keyboard's top edge in global coordinates while it is up.
     @State private var keyboardTop: CGFloat? = nil
     /// How far the composer rides up over the keyboard, which covers the tab bar.
@@ -67,6 +75,12 @@ struct ChatPage: View {
         self.actions = actions
     }
 
+    /// The page keeps its drags from the shell's tab swipes (`ChatActions.overlay`): the "+" card or the
+    /// reaction picker is up, or you are typing.
+    private var holdsTouch: Bool {
+        plusOpen || reactingID != nil || composerFocused
+    }
+
     /// On a per-minute clock, so "Today" and when voting ends roll over on time.
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -75,12 +89,14 @@ struct ChatPage: View {
         .vowBackground()
         .onAppear {
             store.markChatSeen(id)
+            actions.overlay(holdsTouch)
             Task {
                 await store.refresh(id)
             }
         }
         .onDisappear {
             store.markChatSeen(id)
+            actions.overlay(false)
         }
         .onChange(of: store.snapshots[id]) { _, _ in
             store.markChatSeen(id)
@@ -88,7 +104,14 @@ struct ChatPage: View {
         .onChange(of: covered) { (_: Bool, isCovered: Bool) in
             if isCovered {
                 closePlus()
+                closeReactions()
             }
+        }
+        .onChange(of: holdsTouch) { (_: Bool, holds: Bool) in
+            actions.overlay(holds)
+        }
+        .sensoryFeedback(.impact(weight: .medium), trigger: reactingID) { (_: String?, held: String?) -> Bool in
+            held != nil
         }
     }
 
@@ -127,18 +150,39 @@ struct ChatPage: View {
         }
     }
 
-    /// The feed with the "+" scrim over it (the feed only), and the composer (or the join bar) under it. The
-    /// feed ends at the bar rather than scrolling behind it, so the bottom counts as in view only when it is,
-    /// with the keyboard up too.
+    /// The feed, and the composer (or the join bar) under it. The feed ends at the bar rather than scrolling
+    /// behind it, so the bottom counts as in view only when it is, with the keyboard up too. The fade, the
+    /// jump button and the "+" card (over its scrim) sit at the feed's bottom edge, which is the bar's top,
+    /// so they ride the keyboard and the field's growth and never cover the bar. The reaction picker covers
+    /// the whole page.
     private func screen(_ feed: ChatFeed, context: ChatContext, proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 0) {
             feedArea(feed, context: context, proxy: proxy)
                 .frame(maxHeight: .infinity)
+                .overlay(alignment: .bottom) {
+                    fade
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    jumpButton(visible: !atBottom && !plusOpen && !feed.isEmpty, proxy: proxy)
+                }
                 .overlay {
                     scrim
                 }
-            bottomBar(feed, context: context, proxy: proxy)
+                .overlay(alignment: .bottomLeading) {
+                    if plusOpen {
+                        plusCard(feed, context: context)
+                    }
+                }
+            bar(context)
                 .padding(.bottom, lift)
+        }
+        .overlayPreferenceValue(ReactionAnchorKey.self, alignment: .topLeading) { (anchor: Anchor<CGRect>?) in
+            GeometryReader { (geometry: GeometryProxy) in
+                if let target: ReactionTarget = reactionTarget(feed, anchor: anchor, geometry: geometry) {
+                    reactionScrim(target)
+                    reactionPicker(target, page: geometry.size)
+                }
+            }
         }
         .onReceive(ChatPage.keyboardChanges) { (note: Notification) in
             keyboardWillChange(note, hiding: false, maxY: context.maxY, proxy: proxy)
@@ -154,6 +198,11 @@ struct ChatPage: View {
         }
         .onChange(of: topToken) { _, _ in
             scrollToBottom(proxy, animated: true)
+        }
+        .onChange(of: lostHeld(feed)) { (_: Bool, lost: Bool) in
+            if lost {
+                closeReactions()
+            }
         }
     }
 
@@ -247,7 +296,7 @@ struct ChatPage: View {
         case .day(let day):
             dayHeader(day, context: context)
         case .message(let message):
-            bubble(message, context: context)
+            bubble(message, context: context, proxy: proxy)
         case .claim(let claim):
             card(claim, context: context)
         case .pointer(let pointer):
@@ -264,14 +313,22 @@ struct ChatPage: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func bubble(_ message: ChatMessage, context: ChatContext) -> some View {
+    /// A member reacts to a message once it is sent (the store takes reactions to saved posts only).
+    private func bubble(_ message: ChatMessage, context: ChatContext, proxy: ScrollViewProxy) -> some View {
         let postID: String = message.post.id
+        let messageActions: MessageActions = MessageActions(
+            retry: { retry(postID) },
+            delete: { store.discardPost(postID, in: id) },
+            showReactions: { openReactions(postID, proxy: proxy) },
+            react: { (emoji: String?) in react(emoji, to: postID) }
+        )
         return MessageBubble(message: message,
                              time: DayText.time(message.time, timeZoneID: context.group.timeZoneID),
                              failed: context.failedPosts.contains(postID),
                              maxWidth: context.size.width * 0.72,
-                             onRetry: { retry(postID) },
-                             onDelete: { store.discardPost(postID, in: id) })
+                             canReact: context.isMember && message.post.serverDate != nil,
+                             isReacting: reactingID == postID,
+                             actions: messageActions)
     }
 
     private func card(_ claim: ChatClaim, context: ChatContext) -> some View {
@@ -397,23 +454,7 @@ struct ChatPage: View {
     // MARK: - Bottom bar
 
     /// The composer for members (a finished vow's chat stays open), the join bar for someone who isn't one
-    /// yet, or a closing line once the vow has ended. The fade, the jump button and the "+" card ride it, so
-    /// they move with the keyboard and the field's growth and never cover it.
-    private func bottomBar(_ feed: ChatFeed, context: ChatContext, proxy: ScrollViewProxy) -> some View {
-        bar(context)
-            .overlay(alignment: .top) {
-                fade
-            }
-            .overlay(alignment: .topTrailing) {
-                jumpButton(visible: !atBottom && !plusOpen && !feed.isEmpty, proxy: proxy)
-            }
-            .overlay(alignment: .topLeading) {
-                if plusOpen {
-                    plusCard(feed, context: context)
-                }
-            }
-    }
-
+    /// yet, or a closing line once the vow has ended.
     @ViewBuilder
     private func bar(_ context: ChatContext) -> some View {
         if context.isMember {
@@ -440,7 +481,6 @@ struct ChatPage: View {
     private var fade: some View {
         LinearGradient(colors: [Ink.bg.opacity(0), Ink.bg], startPoint: .top, endPoint: .bottom)
             .frame(height: Gap.l)
-            .alignmentGuide(.top) { (d: ViewDimensions) -> CGFloat in d.height }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -462,14 +502,16 @@ struct ChatPage: View {
         .buttonStyle(PressStyle())
         .accessibilityLabel("Latest messages")
         .padding(.trailing, Gap.m)
-        .alignmentGuide(.top) { (d: ViewDimensions) -> CGFloat in d.height + Gap.s }
+        .padding(.bottom, Gap.s)
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
         .accessibilityHidden(!visible)
         .animation(Anim.fade, value: visible)
     }
 
-    /// 8 pt above the composer, from x = 16 (clear of the shell's edge swipe).
+    /// 8 pt above the composer, from x = 16 (clear of the shell's edge swipe). It is laid out in the space
+    /// the feed leaves above the bar, at its own height, so it always fits on screen whole; at large text
+    /// sizes on a small screen it scrolls inside.
     private func plusCard(_ feed: ChatFeed, context: ChatContext) -> some View {
         ChatPlusMenu(header: ChatText.plusHeader(proofDay: feed.proofDay, kind: feed.proofKind, today: context.today,
                                                  isFinished: context.isFinished),
@@ -482,7 +524,7 @@ struct ChatPage: View {
                      onClose: closePlus)
             .frame(width: min(280, max(0, context.size.width - 2 * Gap.l)))
             .padding(.leading, Gap.l)
-            .alignmentGuide(.top) { (d: ViewDimensions) -> CGFloat in d.height + Gap.s }
+            .padding(.vertical, Gap.s)
             .transition(plusTransition)
     }
 
@@ -492,6 +534,58 @@ struct ChatPage: View {
             return AnyTransition.opacity
         }
         return AnyTransition.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading))
+    }
+
+    // MARK: - Reactions
+
+    /// The held message and its bounds on the page, while the picker is open and the message is shown.
+    private func reactionTarget(_ feed: ChatFeed, anchor: Anchor<CGRect>?, geometry: GeometryProxy) -> ReactionTarget? {
+        guard let postID: String = reactingID,
+              let bounds: Anchor<CGRect> = anchor,
+              let message: ChatMessage = feed.message(postID) else { return nil }
+        return ReactionTarget(message: message, frame: geometry[bounds])
+    }
+
+    /// The picker is open over a message the feed no longer shows (a refresh took it away): it closes.
+    private func lostHeld(_ feed: ChatFeed) -> Bool {
+        guard let postID: String = reactingID else { return false }
+        return feed.message(postID) == nil
+    }
+
+    /// Over the whole page, the bar included, with the held bubble left clear. A tap anywhere but the picker
+    /// closes it.
+    private func reactionScrim(_ target: ReactionTarget) -> some View {
+        ScrimCutout(hole: target.frame, bubble: MessageBubble.shape(for: target.message))
+            .fill(Ink.scrim, style: FillStyle(eoFill: true))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                closeReactions()
+            }
+            .transition(.opacity)
+            .accessibilityHidden(true)
+    }
+
+    /// Just above the held bubble (below it when there is no room above), in line with its edge. It grows
+    /// from the side that faces the bubble; under Reduce Motion it only fades.
+    private func reactionPicker(_ target: ReactionTarget, page: CGSize) -> some View {
+        let message: ChatMessage = target.message
+        let cell: CGFloat = ReactionPicker.cell(forWidth: page.width - 2 * Gap.s)
+        let size: CGSize = ReactionPicker.size(cell: cell)
+        let place: ReactionPlace = ReactionPicker.place(size, by: target.frame, alignTrailing: message.isMine, in: page)
+        let facing: CGFloat = place.above ? place.origin.y + size.height : place.origin.y
+        let grows: UnitPoint = UnitPoint(x: (place.origin.x + size.width / 2) / max(page.width, 1),
+                                         y: facing / max(page.height, 1))
+        return ReactionPicker(mine: message.myReaction,
+                              cell: cell,
+                              onReact: { (emoji: String?) in react(emoji, to: message.post.id) },
+                              onCopy: { copy(message) },
+                              onClose: closeReactions)
+            .frame(width: size.width, height: size.height)
+            .padding(.leading, place.origin.x)
+            .padding(.top, place.origin.y)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .transition(reduceMotion ? AnyTransition.opacity
+                                     : AnyTransition.opacity.combined(with: .scale(scale: 0.85, anchor: grows)))
     }
 
     /// Over the feed only, while the "+" card is open: a tap closes the card.
@@ -523,6 +617,41 @@ struct ChatPage: View {
         withAnimation(Anim.standard) {
             plusOpen = false
         }
+    }
+
+    /// A long press on a message: the keyboard and the "+" card go, the message scrolls the least it takes to
+    /// show whole (never under the bar, where the scrim's cut-out would lay the composer bare), and the picker
+    /// opens over it.
+    private func openReactions(_ postID: String, proxy: ScrollViewProxy) {
+        composerFocused = false
+        closePlus()
+        withAnimation(reduceMotion ? nil : Anim.standard) {
+            proxy.scrollTo(postID)
+        }
+        withAnimation(reduceMotion ? Anim.fade : Anim.standard) {
+            reactingID = postID
+        }
+    }
+
+    private func closeReactions() {
+        guard reactingID != nil else { return }
+        withAnimation(reduceMotion ? Anim.fade : Anim.standard) {
+            reactingID = nil
+        }
+    }
+
+    /// From the picker or a chip: an emoji, or nil to take yours back. The store shows it at once and puts
+    /// back the one it replaced if the save fails.
+    private func react(_ emoji: String?, to postID: String) {
+        closeReactions()
+        Task {
+            await store.react(emoji, to: postID, in: id)
+        }
+    }
+
+    private func copy(_ message: ChatMessage) {
+        UIPasteboard.general.string = message.post.text
+        closeReactions()
     }
 
     /// Closes the card, then asks the shell for the camera, the library or the excuse sheet.
@@ -609,6 +738,12 @@ struct ChatPage: View {
             }
         }
     }
+}
+
+/// The message the reaction picker is open over, and its bubble's bounds on the page.
+private struct ReactionTarget {
+    let message: ChatMessage
+    let frame: CGRect
 }
 
 /// What every row needs to know about the page, worked out once per render.

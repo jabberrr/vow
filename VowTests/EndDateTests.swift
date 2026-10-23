@@ -74,7 +74,7 @@ final class EndDateTests: XCTestCase {
             XCTAssertEqual(ending.pot, plain.pot, accuracy: 1e-9)
             XCTAssertEqual(ending.totalForfeited, plain.totalForfeited, accuracy: 1e-9)
             XCTAssertEqual(ending.standings, plain.standings, "day \(day)")
-            XCTAssertEqual(ending.ledger, plain.ledger, "day \(day)")
+            XCTAssertEqual(ending.days, plain.days, "day \(day)")
         }
     }
 
@@ -93,18 +93,19 @@ final class EndDateTests: XCTestCase {
         XCTAssertEqual(ended.totalForfeited, 6, accuracy: 1e-9)
         XCTAssertEqual(ended.pot, 0, accuracy: 1e-9)
         XCTAssertEqual(ended.totalForfeited, reference.totalForfeited, accuracy: 1e-9)
-        XCTAssertEqual(ended.ledger, reference.ledger)
+        XCTAssertEqual(ended.days, reference.days)
         XCTAssertEqual(standing(ended, "me")?.net ?? 99, 6, accuracy: 1e-9)
         XCTAssertEqual(standing(ended, "maya")?.net ?? 99, -6, accuracy: 1e-9)
         XCTAssertEqual(standing(ended, "me")?.net ?? 99, standing(reference, "me")?.net ?? 0, accuracy: 1e-9)
         XCTAssertEqual(standing(ended, "me")?.history ?? [], [DayOutcome.kept, DayOutcome.kept, DayOutcome.kept])
         XCTAssertEqual(standing(ended, "maya")?.history ?? [], [DayOutcome.missed, DayOutcome.missed, DayOutcome.missed])
-        for line in ended.ledger {
-            XCTAssertLessThanOrEqual(line.day, 2, line.text)
+        for entry in ended.days {
+            XCTAssertLessThanOrEqual(entry.day, 2)
+            XCTAssertTrue(entry.isClosed, "day \(entry.day)")
         }
     }
 
-    func testPotStopsAtTheFinalDay() {
+    func testPotStopsAtTheFinalDay() throws {
         // Day 0: Maya misses, you collect 2. Day 1 (final): both miss, the pot carries 4.
         // Check-ins on days 2 and 3 come after the end, so nobody collects the carry.
         let checkIns: [CheckInInfo] = [checkIn("me", 0), checkIn("me", 2), checkIn("maya", 2), checkIn("me", 3)]
@@ -114,7 +115,12 @@ final class EndDateTests: XCTestCase {
         XCTAssertEqual(s.totalForfeited, 6, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "me")?.net ?? 99, 0, accuracy: 1e-9)
         XCTAssertEqual(standing(s, "maya")?.net ?? 99, -4, accuracy: 1e-9)
-        XCTAssertEqual(s.ledger.first?.text, "Day 2 · Nobody kept · pot carries 4 pts")
+        let last: LedgerDay = try XCTUnwrap(s.days.first)
+        XCTAssertEqual(last.day, 1)
+        XCTAssertEqual(last.kept, [])
+        XCTAssertEqual(last.forfeits.count, 2)
+        XCTAssertEqual(last.carriedIn, 0, accuracy: 1e-9)
+        XCTAssertEqual(last.carriedOut, 4, accuracy: 1e-9)
     }
 
     func testNoMembershipEventsAfterTheFinalDay() {
@@ -122,8 +128,10 @@ final class EndDateTests: XCTestCase {
         let s: GroupSummary = summarize(makeGroup(testDay: 4, endDay: 2), members, [checkIn("me", 0)])
         XCTAssertTrue(s.isFinished)
         XCTAssertEqual(standing(s, "late")?.history ?? [DayOutcome.kept], [])
-        for line in s.ledger {
-            XCTAssertLessThanOrEqual(line.day, 2, line.text)
+        for entry in s.days {
+            XCTAssertLessThanOrEqual(entry.day, 2)
+            XCTAssertFalse(entry.joined.contains(where: { (p: LedgerPerson) -> Bool in p.userID == "late" }),
+                           "day \(entry.day)")
         }
         XCTAssertEqual(s.totalForfeited, 4, accuracy: 1e-9)
     }
@@ -197,7 +205,7 @@ final class EndDateTests: XCTestCase {
                                                     net: 0, streak: 0, bestStreak: 0, history: [.missed],
                                                     checkedInToday: false, missedYesterday: true)
         let manual: GroupSummary = GroupSummary(currentDay: 3, cycle: 1, dayInCycle: 4, glyphNumber: 4, pot: 0,
-                                                totalForfeited: 0, standings: [viewer], ledger: [], viewer: viewer,
+                                                totalForfeited: 0, standings: [viewer], days: [], viewer: viewer,
                                                 endDay: 2, isFinished: true)
         XCTAssertFalse(Digest.isOpen(manual))
     }

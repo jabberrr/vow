@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One member (or you, with Edit vow): their vow, today's status, streak, best and net. Only your own
-/// net is coloured. Reads the store live.
+/// One member (or you, with Edit vow): their vow, today's status, streak, best and net, and the owner's
+/// crown. Only your own net is coloured. Reads the store live.
 struct MemberSheet: View {
     let id: GroupID
     let userID: String
@@ -34,6 +34,7 @@ struct MemberSheet: View {
             MemberDetails(summary: s,
                           member: m,
                           isYou: s.viewer?.userID == m.userID,
+                          isOwner: store.snapshots[id]?.group.ownerUserID == m.userID,
                           onClose: { dismiss() },
                           onEditVow: onEditVow)
         } else {
@@ -51,6 +52,7 @@ private struct MemberDetails: View {
     let summary: GroupSummary
     let member: MemberStanding
     let isYou: Bool
+    let isOwner: Bool
     let onClose: () -> Void
     let onEditVow: () -> Void
 
@@ -127,10 +129,7 @@ private struct MemberDetails: View {
 
     private var nameColumn: some View {
         VStack(alignment: .leading, spacing: Gap.xxs) {
-            Text(name)
-                .font(Fonts.title2)
-                .foregroundStyle(Ink.text)
-                .fixedSize(horizontal: false, vertical: true)
+            nameLine
             if !vow.isEmpty {
                 vowText
                     .font(Fonts.subheadline)
@@ -140,9 +139,22 @@ private struct MemberDetails: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(name)
+        .accessibilityLabel(MemberText.spokenName(name, isOwner: isOwner))
         .accessibilityValue(spokenValue)
         .accessibilityAddTraits(.isHeader)
+    }
+
+    /// A long name wraps, and the crown stays on its first line.
+    private var nameLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Gap.s) {
+            Text(name)
+                .font(Fonts.title2)
+                .foregroundStyle(Ink.text)
+                .fixedSize(horizontal: false, vertical: true)
+            if isOwner {
+                OwnerCrown(font: Fonts.title2)
+            }
+        }
     }
 
     // MARK: - Stats

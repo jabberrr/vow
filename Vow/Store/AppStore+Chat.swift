@@ -15,9 +15,9 @@ extension AppStore {
     /// Before your first visit to a group's Chat, what arrived in the last two days counts as new.
     static let unseenWindow: TimeInterval = 2 * 86_400
 
-    /// Someone else posted, sent an excuse or voted on your claim since you last looked at the group's Chat.
-    /// One pass over the group's records, with no Settlement and no allocation, so the tab bar can ask on
-    /// every render.
+    /// Someone else posted, sent an excuse, voted on your claim or reacted to your post since you last looked at
+    /// the group's Chat. One pass over the group's records, with no Settlement and, until someone reacts, no
+    /// allocation, so the tab bar can ask on every render.
     func hasUnseenChat(_ id: GroupID) -> Bool {
         guard let snapshot: GroupSnapshot = snapshots[id],
               let newest: Date = AppStore.latestChatActivity(snapshot, excluding: userID) else { return false }
@@ -26,19 +26,29 @@ extension AppStore {
     }
 
     /// What the chat dot answers to: the newest server date among the posts and excuses of everyone but
-    /// `userID`, and the votes others cast on `userID`'s own claims (someone deciding your day matters to
-    /// you). A bare check-in doesn't count: the orb and the strip already show it. nil when there is none
-    /// (pending records have no date yet).
+    /// `userID`, the votes others cast on `userID`'s own claims (someone deciding your day matters to you),
+    /// and others' reactions to `userID`'s own posts (one taken back doesn't count). A bare check-in doesn't
+    /// count: the orb and the strip already show it. nil when there is none (pending records have no date yet).
     static func latestChatActivity(_ snapshot: GroupSnapshot, excluding userID: String?) -> Date? {
         var newest: Date = .distantPast
-        for p in snapshot.posts where p.authorID != userID {
-            newest = max(newest, p.serverDate ?? .distantPast)
+        // Your own posts matter only for the reactions to them.
+        let collectsOwn: Bool = !snapshot.reactions.isEmpty
+        var ownPosts: Set<String> = []
+        for p in snapshot.posts {
+            if p.authorID != userID {
+                newest = max(newest, p.serverDate ?? .distantPast)
+            } else if collectsOwn {
+                ownPosts.insert(p.id)
+            }
         }
         for e in snapshot.excuses where e.userID != userID {
             newest = max(newest, e.serverDate ?? .distantPast)
         }
         for v in snapshot.votes where v.subjectID == userID && v.voterID != userID {
             newest = max(newest, v.serverDate ?? .distantPast)
+        }
+        for r in snapshot.reactions where r.userID != userID && !r.emoji.isEmpty && ownPosts.contains(r.postID) {
+            newest = max(newest, r.serverDate ?? .distantPast)
         }
         return newest == .distantPast ? nil : newest
     }

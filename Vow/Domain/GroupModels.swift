@@ -99,18 +99,84 @@ struct PostInfo: Codable, Equatable, Identifiable {
     var serverDate: Date?
 }
 
+/// One member's reaction to a chat post. One per (user, post): reacting again replaces it, and "" takes it
+/// back, because the record is overwritten, never deleted.
+struct ReactionInfo: Codable, Equatable, Hashable {
+    var userID: String
+    var postID: String
+    /// One of `Reactions.choices`; any other non-empty string still counts, so a later build's emoji shows.
+    /// "" = taken back.
+    var emoji: String
+    /// The record's server modificationDate (a changed reaction is dated by when it changed); nil = pending.
+    var serverDate: Date?
+}
+
 /// How many of the eligible voters it takes to overrule a check-in or an excuse.
-enum VoteRule: Int, Codable, CaseIterable {
-    case majority = 1, twoThirds = 2, everyone = 3
+enum VoteRule: Hashable, Codable {
+    case majority
+    /// No longer offered. Kept so rule logs and caches written before Custom still read.
+    case twoThirds
+    case everyone
+    /// Custom: this many "Doesn't count" votes, or every voter when fewer take part that day.
+    case count(Int)
+
+    /// What the owner can type for Custom.
+    static let customRange: ClosedRange<Int> = 1...99
 
     /// "Doesn't count" votes that overrule a claim with `n` eligible voters (n ≥ 1): more than half,
-    /// ⌈2n/3⌉ or all of them. With 3 voters: 2, 2, 3; with 5: 3, 4, 5.
+    /// ⌈2n/3⌉, all of them, or k but never more than there are voters (k kept within `customRange`).
+    /// With 3 voters: 2, 2, 3; "2 votes" takes 2 and "5 votes" all 3.
     func needed(voters n: Int) -> Int {
         switch self {
         case .majority: return n / 2 + 1
         case .twoThirds: return (2 * n + 2) / 3
         case .everyone: return n
+        case .count(let k): return min(VoteRule.clamped(k), n)
         }
+    }
+
+    /// What CloudKit and the cache store: 1, 2 and 3 as before Custom, and 100 + k for "k votes", which
+    /// leaves 4...100 for any fixed rule a later build adds. A count outside `customRange` stores as the count
+    /// it judges by.
+    var code: Int {
+        switch self {
+        case .majority: return 1
+        case .twoThirds: return 2
+        case .everyone: return 3
+        case .count(let k): return 100 + VoteRule.clamped(k)
+        }
+    }
+
+    /// nil for a code this build doesn't know (a newer build's rule), or a count outside `customRange`.
+    init?(code: Int) {
+        switch code {
+        case 1: self = .majority
+        case 2: self = .twoThirds
+        case 3: self = .everyone
+        default:
+            // Checked above 100 first, so a corrupt code can't overflow the subtraction.
+            guard code > 100 && VoteRule.customRange.contains(code - 100) else { return nil }
+            self = .count(code - 100)
+        }
+    }
+
+    /// One Int, `code`: a cache written before Custom holds 1, 2 or 3 there, so it keeps reading.
+    init(from decoder: Decoder) throws {
+        let container: SingleValueDecodingContainer = try decoder.singleValueContainer()
+        let code: Int = try container.decode(Int.self)
+        guard let rule: VoteRule = VoteRule(code: code) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown vote rule \(code)")
+        }
+        self = rule
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container: SingleValueEncodingContainer = encoder.singleValueContainer()
+        try container.encode(code)
+    }
+
+    private static func clamped(_ k: Int) -> Int {
+        return min(max(k, customRange.lowerBound), customRange.upperBound)
     }
 }
 
@@ -129,13 +195,14 @@ struct GroupSnapshot: Codable, Equatable, Identifiable {
     var excuses: [ExcuseInfo] = []
     var votes: [VoteInfo] = []
     var posts: [PostInfo] = []
+    var reactions: [ReactionInfo] = []
 
     var id: GroupID { group.id }
 }
 
 extension GroupSnapshot {
     /// Synthesized decoding would demand the newer keys, and a cache that fails to decode is discarded
-    /// whole (it has no schema version): a snapshot cached before chat reads them as empty. In an
+    /// whole (it has no schema version): a snapshot cached before chat or reactions reads them as empty. In an
     /// extension, so the memberwise init survives.
     init(from decoder: Decoder) throws {
         let container: KeyedDecodingContainer<CodingKeys> = try decoder.container(keyedBy: CodingKeys.self)
@@ -146,5 +213,6 @@ extension GroupSnapshot {
         excuses = try container.decodeIfPresent([ExcuseInfo].self, forKey: .excuses) ?? []
         votes = try container.decodeIfPresent([VoteInfo].self, forKey: .votes) ?? []
         posts = try container.decodeIfPresent([PostInfo].self, forKey: .posts) ?? []
+        reactions = try container.decodeIfPresent([ReactionInfo].self, forKey: .reactions) ?? []
     }
 }

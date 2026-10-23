@@ -3,10 +3,13 @@ import SwiftUI
 /// "Members" on the Group page: everyone in `summary.standings` order (you first, then by name) with
 /// today's status, streak and net, then Invite. Only your own net is coloured; friends' nets stay grey,
 /// streaks carry the comparison, and a friend who hasn't checked in yet is "not yet", never "missed".
-/// Someone sitting today out on an excuse has a dashed ring and drops out of the kept count.
+/// Someone sitting today out on an excuse has a dashed ring and drops out of the kept count. The owner
+/// has a crown by their name.
 struct GroupMembersCard: View {
     let summary: GroupSummary
     let viewerID: String
+    /// `GroupInfo.ownerUserID`.
+    let ownerID: String
     /// The last 4 h of a real group's day: your open ring turns flame.
     let atRisk: Bool
     /// Members of an unfinished group: Invite closes the list it adds to.
@@ -16,12 +19,14 @@ struct GroupMembersCard: View {
 
     init(summary: GroupSummary,
          viewerID: String,
+         ownerID: String,
          atRisk: Bool,
          canInvite: Bool,
          onSelect: @escaping (String) -> Void,
          onInvite: @escaping () -> Void) {
         self.summary = summary
         self.viewerID = viewerID
+        self.ownerID = ownerID
         self.atRisk = atRisk
         self.canInvite = canInvite
         self.onSelect = onSelect
@@ -63,6 +68,7 @@ struct GroupMembersCard: View {
                 GroupMemberRow(row: row,
                                theme: theme,
                                isViewer: row.userID == viewerID,
+                               isOwner: row.userID == ownerID,
                                isFinished: summary.isFinished,
                                atRisk: atRisk,
                                onSelect: onSelect)
@@ -79,12 +85,13 @@ struct GroupMembersCard: View {
     }
 }
 
-/// Sphere, name over short vow; streak over net on the right. A button that opens the member sheet.
-/// The Group page is never on screen during a check-in, so every value is the store's.
+/// Sphere, name (with the owner's crown) over short vow; streak over net on the right. A button that opens
+/// the member sheet. The Group page is never on screen during a check-in, so every value is the store's.
 private struct GroupMemberRow: View {
     let row: MemberStanding
     let theme: DailyTheme
     let isViewer: Bool
+    let isOwner: Bool
     let isFinished: Bool
     let atRisk: Bool
     let onSelect: (String) -> Void
@@ -92,12 +99,14 @@ private struct GroupMemberRow: View {
     init(row: MemberStanding,
          theme: DailyTheme,
          isViewer: Bool,
+         isOwner: Bool,
          isFinished: Bool,
          atRisk: Bool,
          onSelect: @escaping (String) -> Void) {
         self.row = row
         self.theme = theme
         self.isViewer = isViewer
+        self.isOwner = isOwner
         self.isFinished = isFinished
         self.atRisk = atRisk
         self.onSelect = onSelect
@@ -121,9 +130,13 @@ private struct GroupMemberRow: View {
         VowFormat.short(row.vow)
     }
 
-    /// "Maya, Swim 40 lengths, kept today, 21-day streak, plus 6.25 points"
+    private var nameFont: Font {
+        isViewer ? Fonts.subheadlineSemibold : Fonts.subheadlineMedium
+    }
+
+    /// "Maya, owner, Swim 40 lengths, kept today, 21-day streak, plus 6.25 points"
     private var spoken: String {
-        var parts: [String] = [name]
+        var parts: [String] = [MemberText.spokenName(name, isOwner: isOwner)]
         if !shortVow.isEmpty {
             parts.append(shortVow)
         }
@@ -166,15 +179,25 @@ private struct GroupMemberRow: View {
 
     private var nameColumn: some View {
         VStack(alignment: .leading, spacing: Gap.xxs) {
-            Text(name)
-                .font(isViewer ? Fonts.subheadlineSemibold : Fonts.subheadlineMedium)
-                .foregroundStyle(Ink.text)
-                .lineLimit(1)
+            nameLine
             if !shortVow.isEmpty {
                 Text(shortVow)
                     .font(Fonts.footnote)
                     .foregroundStyle(Ink.text2)
                     .lineLimit(1)
+            }
+        }
+    }
+
+    /// The name truncates before the crown does.
+    private var nameLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Gap.xs) {
+            Text(name)
+                .font(nameFont)
+                .foregroundStyle(Ink.text)
+                .lineLimit(1)
+            if isOwner {
+                OwnerCrown(font: nameFont)
             }
         }
     }
@@ -335,12 +358,36 @@ struct KeptNote {
     }
 }
 
+/// The owner's mark beside their name, on the Group page and in the member sheet: a small crown in the name's
+/// own font, so it scales with it. Neutral, because it is a role and not a status. VoiceOver hears "owner" in
+/// the label it sits by instead (`MemberText.spokenName`).
+struct OwnerCrown: View {
+    let font: Font
+
+    init(font: Font) {
+        self.font = font
+    }
+
+    var body: some View {
+        Image(systemName: "crown.fill")
+            .font(font)
+            .imageScale(.small)
+            .foregroundStyle(Ink.text2)
+            .accessibilityHidden(true)
+    }
+}
+
 /// A member's name and net for display. Nets read like balances: signed unless zero ("+4.5 pts", "0 pts").
 enum MemberText {
-    /// Trimmed display name; empty -> "Someone" (as the ledger says).
+    /// Trimmed display name; empty -> "Someone", as Activity says it (`ActivityFeed.name`).
     static func name(_ displayName: String) -> String {
         let trimmed: String = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Someone" : trimmed
+    }
+
+    /// "Maya, owner" for the owner (whose crown VoiceOver doesn't read); otherwise the name as shown.
+    static func spokenName(_ name: String, isOwner: Bool) -> String {
+        return isOwner ? name + ", owner" : name
     }
 
     /// "+4.5 pts", "−2 pts", "0 pts".

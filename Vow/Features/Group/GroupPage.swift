@@ -73,6 +73,7 @@ struct GroupPage: View {
         return VStack(spacing: Gap.xxl) {
             GroupMembersCard(summary: summary,
                              viewerID: store.userID ?? "",
+                             ownerID: group.ownerUserID,
                              atRisk: DayWindow.isAtRisk(group, now: now),
                              canInvite: isMember && !summary.isFinished,
                              onSelect: actions.showMember,
@@ -234,9 +235,9 @@ private struct GroupFactRow: View {
     }
 }
 
-/// "Overrule with … More than half", with "Two thirds from tomorrow" under the title while a change waits.
-/// A button with a chevron for the owner; the same row, read-only, for everyone else. The value stacks
-/// under the title at accessibility sizes.
+/// "Overrule with … More than half", with "2 votes from tomorrow" under the title while a change waits. A
+/// legacy Two thirds still in force reads as its title. A button with a chevron for the owner; the same row,
+/// read-only, for everyone else. The value stacks under the title at accessibility sizes.
 private struct VoteRuleRow: View {
     let today: VoteRule
     /// Tomorrow's rule, only when it differs from today's.
@@ -254,13 +255,13 @@ private struct VoteRuleRow: View {
 
     private static let title: String = "Overrule with"
 
-    /// "Two thirds from tomorrow".
+    /// "2 votes from tomorrow".
     private var change: String? {
         guard let next: VoteRule = tomorrow else { return nil }
         return VoteRuleText.title(next) + " from tomorrow"
     }
 
-    /// "More than half, Two thirds from tomorrow".
+    /// "More than half, 2 votes from tomorrow".
     private var spokenValue: String {
         guard let line: String = change else { return VoteRuleText.title(today) }
         return VoteRuleText.title(today) + ", " + line

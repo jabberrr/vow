@@ -1,10 +1,34 @@
 import CloudKit
 import UIKit
 
-/// Installed by VowApp via `@UIApplicationDelegateAdaptor(AppDelegate.self)`.
-/// Its only job is to route scenes to SceneDelegate so CloudKit share acceptances reach ShareInbox.
+/// Installed by VowApp via `@UIApplicationDelegateAdaptor(AppDelegate.self)`. It routes scenes to SceneDelegate, so
+/// CloudKit share acceptances reach ShareInbox, and CloudKit's silent pushes to ChangeInbox.
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// CloudKit pushes to this device only once it is registered. Silent pushes need no permission, so nothing
+    /// is asked.
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        if !AppStore.isRunningUnitTests {
+            application.registerForRemoteNotifications()
+        }
+        return true
+    }
+
+    /// Something changed in a group (`CloudService.ensureSubscriptions`). A push that isn't CloudKit's isn't ours,
+    /// and is answered at once.
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard CKNotification(fromRemoteNotificationDictionary: userInfo) != nil else {
+            completionHandler(.noData)
+            return
+        }
+        ChangeInbox.deliver { (changed: Bool) in
+            completionHandler(changed ? .newData : .noData)
+        }
+    }
+
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {

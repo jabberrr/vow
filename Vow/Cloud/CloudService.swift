@@ -15,9 +15,22 @@ enum CloudError: Error {
 final class CloudService: @unchecked Sendable {
     static let shared: CloudService = CloudService()
 
+    /// The silent pushes' subscriptions, one per database (`ensureSubscriptions`).
+    static let privateSubscriptionID: String = "vow-private"
+    static let sharedSubscriptionID: String = "vow-shared"
+
     private let injectedContainer: CKContainer?
     private let containerLock = NSLock()
     private var resolvedContainer: CKContainer? = nil
+
+    /// What each zone's fetches have seen and the fetch each zone's next one waits for, with the counts a forget
+    /// bumps: one per zone (`forgetZone`), and one for every zone at once (`forgetAllZones`). Only under
+    /// `mirrorLock`, and only in memory.
+    private let mirrorLock = NSLock()
+    private var mirrors: [GroupID: ZoneMirror] = [:]
+    private var fetchTails: [GroupID: Task<GroupSnapshot, Error>] = [:]
+    private var zoneGenerations: [GroupID: Int] = [:]
+    private var mirrorGeneration: Int = 0
 
     /// The container is created lazily on first use (never at init), so merely referencing
     /// CloudService.shared doesn't touch CloudKit (unit tests run without entitlements).
@@ -68,102 +81,125 @@ final class CloudService: @unchecked Sendable {
     }
 
     /// The whole zone without assets (`Records.snapshotKeys`): posts arrive as text, aspect and duration, and their
-    /// photos and videos are fetched one at a time with `fetchAsset`.
+    /// photos and videos are fetched one at a time with `fetchAsset`. Only what changed since the zone's last fetch
+    /// is downloaded, onto what that fetch saw (the zone's mirror). Fetches of one zone run one after another until
+    /// the zone is forgotten, so an older change can never land on top of a newer one.
     func fetchSnapshot(_ id: GroupID) async throws -> GroupSnapshot {
+        return try await queuedFetch(id).value
+    }
+
+    /// Forgets what fetches of the group's zone have seen, so the next one downloads it whole: you left or deleted
+    /// the group, or it has gone. A fetch of it already under way finishes but keeps nothing, and the next one
+    /// doesn't wait for it. Other zones' fetches keep what they see.
+    func forgetZone(_ id: GroupID) {
+        mirrorLock.lock()
+        mirrors[id] = nil
+        fetchTails[id] = nil
+        zoneGenerations[id, default: 0] += 1
+        mirrorLock.unlock()
+    }
+
+    /// Forgets every zone's mirror: "Reset local data", or another iCloud account.
+    func forgetAllZones() {
+        mirrorLock.lock()
+        mirrors.removeAll()
+        fetchTails.removeAll()
+        mirrorGeneration += 1
+        mirrorLock.unlock()
+    }
+
+    /// Starts a fetch of the zone once the one before it has ended, however that one ended.
+    private func queuedFetch(_ id: GroupID) -> Task<GroupSnapshot, Error> {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        let previous: Task<GroupSnapshot, Error>? = fetchTails[id]
+        let next: Task<GroupSnapshot, Error> = Task<GroupSnapshot, Error> {
+            if let earlier: Task<GroupSnapshot, Error> = previous {
+                _ = try? await earlier.value
+            }
+            return try await self.fetchZone(id)
+        }
+        fetchTails[id] = next
+        return next
+    }
+
+    /// The zone's changes since its mirror's token, applied to a copy of the mirror: the whole zone without a
+    /// mirror, or once the server no longer knows the token (the zone was reset, or the token is too old). The
+    /// copy replaces the mirror only when every changed record arrived, so a record that failed comes again next
+    /// time. A zone without its Group record is `groupMissing`, and a zone that has gone takes its mirror with it.
+    private func fetchZone(_ id: GroupID) async throws -> GroupSnapshot {
+        let kept: (mirror: ZoneMirror?, stamp: MirrorStamp) = keptMirror(id)
+        do {
+            var pulled: (mirror: ZoneMirror, complete: Bool)
+            do {
+                pulled = try await pull(id, onto: kept.mirror ?? ZoneMirror())
+            } catch let error where kept.mirror != nil && CloudErrors.code(error) == .changeTokenExpired {
+                pulled = try await pull(id, onto: ZoneMirror())
+            }
+            if pulled.mirror.shareURL == nil {
+                let fetched: CKRecord? = try? await database(for: id).record(for: Records.shareRecordID(in: id))
+                pulled.mirror.shareURL = (fetched as? CKShare)?.url
+            }
+            guard let snapshot: GroupSnapshot = pulled.mirror.snapshot(of: id) else { throw CloudError.groupMissing }
+            if pulled.complete {
+                keep(pulled.mirror, for: id, began: kept.stamp)
+            }
+            return snapshot
+        } catch {
+            if CloudErrors.isGone(error) {
+                forgetZone(id)
+            }
+            throw error
+        }
+    }
+
+    /// Applies the zone's changes since `start.token` (all of it without one) to `start`, page by page. Not
+    /// complete when a changed record failed to arrive.
+    private func pull(_ id: GroupID, onto start: ZoneMirror) async throws -> (mirror: ZoneMirror, complete: Bool) {
         let db: CKDatabase = database(for: id)
         let zoneID: CKRecordZone.ID = Records.zoneID(id)
-
-        var token: CKServerChangeToken? = nil
+        var mirror: ZoneMirror = start
+        var complete: Bool = true
         var moreComing: Bool = true
-        var groupRecord: CKRecord? = nil
-        var members: [String: MemberInfo] = [:]
-        var checkIns: [String: CheckInInfo] = [:]
-        var excuses: [String: ExcuseInfo] = [:]
-        var votes: [String: VoteInfo] = [:]
-        var posts: [String: PostInfo] = [:]
-        var shareURL: URL? = nil
-
         while moreComing {
-            let changes = try await db.recordZoneChanges(inZoneWith: zoneID, since: token,
+            let changes = try await db.recordZoneChanges(inZoneWith: zoneID, since: mirror.token,
                                                          desiredKeys: Records.snapshotKeys)
+            for deletion in changes.deletions {
+                mirror.remove(deletion.recordID.recordName)
+            }
             for (_, result) in changes.modificationResultsByID {
                 switch result {
                 case .success(let modification):
-                    let record: CKRecord = modification.record
-                    if let share = record as? CKShare {
-                        if let url = share.url { shareURL = url }
-                        continue
-                    }
-                    let name: String = record.recordID.recordName
-                    switch record.recordType {
-                    case Records.groupType:
-                        groupRecord = record
-                    case Records.memberType:
-                        if let m = Records.memberInfo(from: record) {
-                            members[m.userID] = m
-                        }
-                    case Records.checkInType:
-                        if let c = Records.checkInInfo(from: record) {
-                            checkIns[name] = c
-                        }
-                    case Records.excuseType:
-                        if let e = Records.excuseInfo(from: record) {
-                            excuses[name] = e
-                        }
-                    case Records.voteType:
-                        if let v = Records.voteInfo(from: record) {
-                            votes[name] = v
-                        }
-                    case Records.postType:
-                        if let p = Records.postInfo(from: record) {
-                            posts[name] = p
-                        }
-                    default:
-                        break
-                    }
+                    mirror.apply(modification.record, in: id)
                 case .failure:
-                    continue
+                    complete = false
                 }
             }
-            token = changes.changeToken
+            mirror.token = changes.changeToken
             moreComing = changes.moreComing
         }
+        return (mirror, complete)
+    }
 
-        guard let gRecord = groupRecord else { throw CloudError.groupMissing }
-        var group: GroupInfo = Records.groupInfo(from: gRecord, id: id)
+    private func keptMirror(_ id: GroupID) -> (mirror: ZoneMirror?, stamp: MirrorStamp) {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        return (mirrors[id], stamp(for: id))
+    }
 
-        if shareURL == nil {
-            let fetched: CKRecord? = try? await db.record(for: Records.shareRecordID(in: id))
-            if let share = fetched as? CKShare {
-                shareURL = share.url
-            }
+    /// Unless a forget of the zone, or of every zone, came after the fetch began: what it saw may belong to a group
+    /// that has gone, or to local data that was reset.
+    private func keep(_ mirror: ZoneMirror, for id: GroupID, began: MirrorStamp) {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        if stamp(for: id) == began {
+            mirrors[id] = mirror
         }
-        group.shareURL = shareURL
+    }
 
-        let memberList: [MemberInfo] = members.values.sorted { $0.userID < $1.userID }
-        let checkInList: [CheckInInfo] = checkIns.values.sorted { (a: CheckInInfo, b: CheckInInfo) -> Bool in
-            if a.day != b.day { return a.day < b.day }
-            return a.userID < b.userID
-        }
-        let excuseList: [ExcuseInfo] = excuses.values.sorted { (a: ExcuseInfo, b: ExcuseInfo) -> Bool in
-            if a.day != b.day { return a.day < b.day }
-            if a.userID != b.userID { return a.userID < b.userID }
-            return a.epoch < b.epoch
-        }
-        let voteList: [VoteInfo] = votes.values.sorted { (a: VoteInfo, b: VoteInfo) -> Bool in
-            if a.day != b.day { return a.day < b.day }
-            if a.subjectID != b.subjectID { return a.subjectID < b.subjectID }
-            if a.voterID != b.voterID { return a.voterID < b.voterID }
-            return a.epoch < b.epoch
-        }
-        let postList: [PostInfo] = posts.values.sorted { (a: PostInfo, b: PostInfo) -> Bool in
-            let sentA: Date = a.serverDate ?? .distantFuture
-            let sentB: Date = b.serverDate ?? .distantFuture
-            if sentA != sentB { return sentA < sentB }
-            return a.id < b.id
-        }
-        return GroupSnapshot(group: group, members: memberList, checkIns: checkInList, fetchedAt: Date(),
-                             excuses: excuseList, votes: voteList, posts: postList)
+    /// The zone's forgets so far. Only under `mirrorLock`.
+    private func stamp(for id: GroupID) -> MirrorStamp {
+        return MirrorStamp(all: mirrorGeneration, zone: zoneGenerations[id] ?? 0)
     }
 
     /// Downloads one of a post's assets and returns CloudKit's temporary file for it. Copy the file before
@@ -328,6 +364,21 @@ final class CloudService: @unchecked Sendable {
         return Records.voteInfo(from: saved.first ?? record) ?? vote
     }
 
+    /// One record per (user, post), like a vote: reacting again overwrites it, and "" takes it back. Re-sending the
+    /// emoji already saved changes nothing.
+    func saveReaction(_ reaction: ReactionInfo, in id: GroupID) async throws -> ReactionInfo {
+        let db: CKDatabase = database(for: id)
+        let recordID: CKRecord.ID = Records.reactionRecordID(reaction, in: id)
+        let existing: CKRecord? = try await existingRecord(recordID, in: db)
+        if let record = existing, let current = Records.reactionInfo(from: record), current.emoji == reaction.emoji {
+            return current
+        }
+        let record: CKRecord = existing ?? CKRecord(recordType: Records.reactionType, recordID: recordID)
+        Records.apply(reaction, to: record)
+        let saved: [CKRecord] = try await save([record], in: db, policy: .changedKeys, atomically: false)
+        return Records.reactionInfo(from: saved.first ?? record) ?? reaction
+    }
+
     /// Saves a new post with its files. `progress` reports the upload (0…1) on CloudKit's queue, not the main
     /// thread. Returns the post with the server's creationDate. Idempotent like `saveCheckIn`: a retry whose first
     /// save landed but whose reply was lost finds the post there and returns the server's copy, read without its
@@ -381,6 +432,30 @@ final class CloudService: @unchecked Sendable {
     /// Owner deletes the whole group (zone + share + records).
     func deleteGroup(_ id: GroupID) async throws {
         _ = try await privateDB.deleteRecordZone(withID: Records.zoneID(id))
+    }
+
+    // MARK: - Push
+
+    /// Asks CloudKit for a silent push whenever anything changes in a group: one subscription on the private
+    /// database (the groups you own) and one on the shared database (those you joined). Their ids are fixed, so
+    /// saving them again only replaces them. True once both are saved; false if either save failed, whether the
+    /// request threw or the subscription came back failed, so the caller can try again (the polls sync meanwhile).
+    func ensureSubscriptions() async -> Bool {
+        let targets: [(db: CKDatabase, id: String)] = [(privateDB, CloudService.privateSubscriptionID),
+                                                       (sharedDB, CloudService.sharedSubscriptionID)]
+        var saved: Bool = true
+        for target in targets {
+            let info: CKSubscription.NotificationInfo = CKSubscription.NotificationInfo()
+            info.shouldSendContentAvailable = true
+            let subscription: CKDatabaseSubscription = CKDatabaseSubscription(subscriptionID: target.id)
+            subscription.notificationInfo = info
+            let results = try? await target.db.modifySubscriptions(saving: [subscription], deleting: [])
+            if case .success? = results?.saveResults[target.id] {
+                continue
+            }
+            saved = false
+        }
+        return saved
     }
 
     // MARK: - Helpers
@@ -467,6 +542,115 @@ final class CloudService: @unchecked Sendable {
             throw e
         }
         return saved
+    }
+}
+
+/// When a fetch began, counted in forgets: what it saw replaces its zone's mirror only if no forget of that zone, or
+/// of every zone, came after.
+private struct MirrorStamp: Equatable {
+    let all: Int
+    let zone: Int
+}
+
+/// What one zone's fetches have seen, so the next fetch asks only for what changed since `token`. Records are kept
+/// parsed and by record name: a deletion names only the record, and a changed record that no longer parses takes its
+/// old copy with it.
+private struct ZoneMirror {
+    var token: CKServerChangeToken? = nil
+    var group: GroupInfo? = nil
+    var shareURL: URL? = nil
+    var members: [String: MemberInfo] = [:]
+    var checkIns: [String: CheckInInfo] = [:]
+    var excuses: [String: ExcuseInfo] = [:]
+    var votes: [String: VoteInfo] = [:]
+    var posts: [String: PostInfo] = [:]
+    var reactions: [String: ReactionInfo] = [:]
+
+    mutating func apply(_ record: CKRecord, in id: GroupID) {
+        if let share = record as? CKShare {
+            if let url = share.url { shareURL = url }
+            return
+        }
+        let name: String = record.recordID.recordName
+        switch record.recordType {
+        case Records.groupType:
+            group = Records.groupInfo(from: record, id: id)
+        case Records.memberType:
+            members[name] = Records.memberInfo(from: record)
+        case Records.checkInType:
+            checkIns[name] = Records.checkInInfo(from: record)
+        case Records.excuseType:
+            excuses[name] = Records.excuseInfo(from: record)
+        case Records.voteType:
+            votes[name] = Records.voteInfo(from: record)
+        case Records.postType:
+            posts[name] = Records.postInfo(from: record)
+        case Records.reactionType:
+            reactions[name] = Records.reactionInfo(from: record)
+        default:
+            break
+        }
+    }
+
+    mutating func remove(_ name: String) {
+        if name == Records.groupRecordName {
+            group = nil
+        }
+        if name == CKRecordNameZoneWideShare {
+            shareURL = nil
+        }
+        members[name] = nil
+        checkIns[name] = nil
+        excuses[name] = nil
+        votes[name] = nil
+        posts[name] = nil
+        reactions[name] = nil
+    }
+
+    /// Every list in a fixed order, so equal zones make equal snapshots on every device; nil without the Group
+    /// record. One member per userID: of two records that claim one, the later record name.
+    func snapshot(of id: GroupID) -> GroupSnapshot? {
+        guard var info: GroupInfo = group else { return nil }
+        info.shareURL = shareURL
+        var byUser: [String: MemberInfo] = [:]
+        for name in members.keys.sorted() {
+            if let m: MemberInfo = members[name] {
+                byUser[m.userID] = m
+            }
+        }
+        let memberList: [MemberInfo] = byUser.values.sorted { (a: MemberInfo, b: MemberInfo) -> Bool in
+            return a.userID < b.userID
+        }
+        let checkInList: [CheckInInfo] = checkIns.values.sorted { (a: CheckInInfo, b: CheckInInfo) -> Bool in
+            if a.day != b.day { return a.day < b.day }
+            return a.userID < b.userID
+        }
+        let excuseList: [ExcuseInfo] = excuses.values.sorted { (a: ExcuseInfo, b: ExcuseInfo) -> Bool in
+            if a.day != b.day { return a.day < b.day }
+            if a.userID != b.userID { return a.userID < b.userID }
+            return a.epoch < b.epoch
+        }
+        let voteList: [VoteInfo] = votes.values.sorted { (a: VoteInfo, b: VoteInfo) -> Bool in
+            if a.day != b.day { return a.day < b.day }
+            if a.subjectID != b.subjectID { return a.subjectID < b.subjectID }
+            if a.voterID != b.voterID { return a.voterID < b.voterID }
+            return a.epoch < b.epoch
+        }
+        let postList: [PostInfo] = posts.values.sorted { (a: PostInfo, b: PostInfo) -> Bool in
+            let sentA: Date = a.serverDate ?? .distantFuture
+            let sentB: Date = b.serverDate ?? .distantFuture
+            if sentA != sentB { return sentA < sentB }
+            return a.id < b.id
+        }
+        let reactionList: [ReactionInfo] = reactions.values.sorted { (a: ReactionInfo, b: ReactionInfo) -> Bool in
+            let changedA: Date = a.serverDate ?? .distantFuture
+            let changedB: Date = b.serverDate ?? .distantFuture
+            if changedA != changedB { return changedA < changedB }
+            if a.postID != b.postID { return a.postID < b.postID }
+            return a.userID < b.userID
+        }
+        return GroupSnapshot(group: info, members: memberList, checkIns: checkInList, fetchedAt: Date(),
+                             excuses: excuseList, votes: voteList, posts: postList, reactions: reactionList)
     }
 }
 
