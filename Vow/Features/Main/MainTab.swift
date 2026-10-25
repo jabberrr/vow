@@ -20,6 +20,11 @@ enum MainTab: Int, CaseIterable, Identifiable {
         MainTab(rawValue: rawValue - 1)
     }
 
+    /// Next to `other` in the tab bar, on either side.
+    func isNeighbour(of other: MainTab) -> Bool {
+        return abs(rawValue - other.rawValue) == 1
+    }
+
     var title: String {
         switch self {
         case .home: return "Home"

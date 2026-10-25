@@ -319,6 +319,23 @@ final class CloudService: @unchecked Sendable {
         return Records.groupID(accepted.recordID.zoneID)
     }
 
+    /// The waits before each retry of `fetchJoinedSnapshot`: about 3 s in all.
+    private static let joinRetryNanos: [UInt64] = [500_000_000, 1_000_000_000, 1_500_000_000]
+
+    /// The first fetch of a group whose share was just accepted. CloudKit may not show the zone, or its Group record,
+    /// for a moment after the accept, so a fetch that finds the group gone is tried again a few times
+    /// (`joinRetryNanos`) before its error is thrown. Any other error is thrown at once.
+    func fetchJoinedSnapshot(_ id: GroupID) async throws -> GroupSnapshot {
+        for delay in CloudService.joinRetryNanos {
+            do {
+                return try await fetchSnapshot(id)
+            } catch let error where CloudErrors.isGone(error) {
+                try await Task.sleep(nanoseconds: delay)
+            }
+        }
+        return try await fetchSnapshot(id)
+    }
+
     // MARK: - Writing
 
     func saveMember(_ member: MemberInfo, in id: GroupID) async throws {
@@ -712,8 +729,33 @@ enum CloudErrors {
         case .temporarilyUnavailable:
             return "iCloud is temporarily unavailable. Check Settings > iCloud, then try again."
         default:
-            return "Sign in to iCloud in Settings to use groups."
+            return "Sign in to iCloud in Settings, and check that iCloud is on for Vow."
         }
+    }
+
+    /// What a failed join says, so the next failure tells what happened. `accepted`: the share was accepted and only
+    /// loading its group failed, so opening the link again skips straight to that. Before then, an invite iCloud
+    /// can't find may have lost its group, or come from a build on the other environment, which keeps its own groups
+    /// and links: the message names the kind of build that would be. A tapped link shows it only as a two-line
+    /// toast, so each stays that short, the code first. Account problems and the rest read as anywhere else.
+    static func joinMessage(_ error: Error, accepted: Bool, environment: CloudEnvironment = .current) -> String {
+        guard isGone(error) else { return message(error) }
+        let note: String = codeNote(error)
+        if accepted {
+            return "The group didn't load yet\(note). Open the link again in a minute."
+        }
+        switch environment {
+        case .development:
+            return "Invite not found\(note). Its group may be gone, or it's from a TestFlight build."
+        case .production:
+            return "Invite not found\(note). Its group may be gone, or it's from a test build."
+        }
+    }
+
+    /// " (code 11)" for a CloudKit error, so a report says which one it was; nothing for the app's own.
+    private static func codeNote(_ error: Error) -> String {
+        guard let c = code(error) else { return "" }
+        return " (code \(c.rawValue))"
     }
 
     /// The underlying CloudKit error (the first real one inside a partial failure).
@@ -743,11 +785,13 @@ enum CloudErrors {
         case .networkUnavailable, .networkFailure:
             return "You're offline."
         case .notAuthenticated:
-            return "Sign in to iCloud."
+            return "Sign in to iCloud in Settings, with iCloud on for Vow, then try again (code \(c.rawValue))."
+        case .managedAccountRestricted:
+            return "This is a managed Apple ID, and its restrictions don't allow this (code \(c.rawValue))."
         case .quotaExceeded:
             return "Your iCloud storage is full."
         case .zoneNotFound, .unknownItem, .userDeletedZone:
-            return "That group no longer exists."
+            return "That group no longer exists (code \(c.rawValue))."
         case .permissionFailure:
             return "You don't have access to that group."
         case .serviceUnavailable, .requestRateLimited, .zoneBusy:

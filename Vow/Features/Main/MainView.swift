@@ -24,10 +24,12 @@ struct MainView: View {
     @State private var presenter: Presenter = Presenter()
     @State private var selected: GroupID? = nil
     @State private var tab: MainTab = .home
-    /// Bumped when the selected tab is tapped again: its page scrolls to the top (Chat: to the latest).
-    @State private var topToken: Int = 0
-    /// Each group's unsent Chat message, kept across tab and group switches while the app runs.
-    @State private var chatDrafts: [GroupID: String] = [:]
+    /// Each tab's count of taps on it while it is selected: its page scrolls to the top (Chat: to the latest). One per
+    /// tab, so a neighbour mounted beside the page never hears of a tap that was the page's.
+    @State private var topTokens: [MainTab: Int] = [:]
+    /// Each group's unsent Chat message, kept across tab and group switches while the app runs. Never read here:
+    /// Chat gets a binding into it (`chatDraft`), so typing renders the composer, not the shell.
+    @State private var chatDrafts: ChatDrafts = ChatDrafts()
     @State private var sidebarOpen: Bool = false
     /// A swipe from the leading edge while the panel follows it. Gesture state, like `closeDrag`: a
     /// cancelled drag (a sheet or an alert taking the touch, the app going inactive) resets itself, so
@@ -43,10 +45,23 @@ struct MainView: View {
     /// The sidebar was closed while a swipe from the edge or across Home was still under the finger: that
     /// swipe no longer shows or opens the panel. Cleared when it ends.
     @State private var edgeCancelled: Bool = false
-    /// A swipe under way, as `PagerTrack` reports it, from taking its touch until its track has landed: the side
-    /// its neighbour is mounted on, or how far Home's swipe has brought the sidebar out. nil while none is (a
-    /// scroll never sets it).
-    @State private var pageSwipe: PageSwipe? = nil
+    /// A swipe between pages under way, from taking its touch until its track has landed. A reference nothing
+    /// observes, so a swipe toward a page already mounted never renders the shell: what the shell draws for a swipe
+    /// is state of its own (`swipeMount`, `sidebarTravel`).
+    @State private var paging: Paging = Paging()
+    /// The neighbour a swipe heads for when it isn't mounted already (Home, which is mounted only as the page, or one
+    /// a swipe reaches before the page has rested), from when the swipe takes its touch until it is over.
+    @State private var swipeMount: MainTab? = nil
+    /// How far Home's swipe to the right has brought the sidebar out; nil while none is (a scroll never sets it).
+    @State private var sidebarTravel: CGFloat? = nil
+    /// Bumped when the tab is chosen another way while a page swipe is under way: its track drops a landing in flight.
+    @State private var swipeDropToken: Int = 0
+    /// The tab a swipe was let go toward, shown selected in the tab bar until its track has landed. Only the tab
+    /// bar reads it.
+    @State private var highlight: TabHighlight = TabHighlight()
+    /// The tab that last rested as the page, a beat after it became the page (`settle`): its neighbours are mounted.
+    /// Forgotten whenever Home is the page with its orb open (`track`).
+    @State private var rested: RestPlace? = nil
     /// What stops a swipe from starting, read only then: Chat's overlays, and a seal Home may still owe.
     @State private var swipeGuard: SwipeGuard = SwipeGuard()
     @State private var menuPulseToken: Int = 0
@@ -78,6 +93,13 @@ struct MainView: View {
     private static let chatRefreshNanos: UInt64 = 5_000_000_000
     /// The strip along the leading edge that opens the sidebar with a swipe.
     private static let edgeWidth: CGFloat = 16
+    /// How long a tab is the page before its neighbours are mounted beside it: as long as the screen's crossfade and
+    /// longer than a group switch's, so a mount never lands in either, nor in a tab swap or a landing's change of tab.
+    private static let restNanos: UInt64 = 350_000_000
+    /// Home's rest, from when it falls due: as long as the whole cascade after a seal, up to the reminder offer, so
+    /// Chat mounting beside Home never lands in the social, milestone, ≡ pulse or offer beats. Due alone isn't enough:
+    /// the hold counts as busy only until the social beat (`holdingLightID`), 0.45 s after the seal.
+    private static let homeRestNanos: UInt64 = Anim.offerNanos
     /// A swipe on Home that began on the orb without dimming the room (it moved within the dim gate) can
     /// complete the hold under it. Its first change came within one gate of touch-down, so one let go
     /// sooner than this can't have, and a longer one stays: the orb must not leave before its seal. The
@@ -165,11 +187,13 @@ struct MainView: View {
     }
 
     /// Whenever a group's page is shown: members, not-members and finished vows alike, so the five tabs
-    /// keep their places. Chat's dot is for the shown group, and never while Chat is the page.
+    /// keep their places. Chat's dot is for the shown group, and never while Chat is the page (nor, the bar sees
+    /// to it, while a swipe is landing there).
     @ViewBuilder
     private func tabBar(all: [GroupID: GroupSummary], bottomInset: CGFloat) -> some View {
         if let id: GroupID = shownID {
             VowTabBar(selection: tab,
+                      highlight: highlight,
                       streakLit: streakLit(id, all: all),
                       chatDot: tab != .chat && store.hasUnseenChat(id),
                       dimmed: roomDimmed,
@@ -188,17 +212,9 @@ struct MainView: View {
     private func page(all: [GroupID: GroupSummary], metrics: StageMetrics, width: CGFloat, panel: CGFloat) -> some View {
         if let id: GroupID = shownID {
             let orbOpen: Bool = all[id].map { (s: GroupSummary) -> Bool in Digest.isOpen(s) } ?? false
-            PagerTrack(width: width,
-                       index: tab.rawValue,
-                       count: MainTab.allCases.count,
-                       sidebarIndex: MainTab.home.rawValue,
-                       holdLimit: orbOpen ? MainView.homeSwipeLimit : nil,
-                       swiping: paging,
-                       hooks: swipeHooks(id, panel: panel)) {
-                pages(id, metrics: metrics, width: width)
-            }
-            .id(id)
-            .transition(.opacity)
+            track(id, orbOpen: orbOpen, metrics: metrics, width: width, panel: panel)
+                .id(id)
+                .transition(.opacity)
         } else if store.groupIDs.isEmpty && !(store.isRefreshing && store.lastSyncedAt == nil) {
             EmptyStage(metrics: metrics,
                        onCreate: { presenter.present(.create, from: .screen) },
@@ -210,39 +226,95 @@ struct MainView: View {
         }
     }
 
+    /// Group `id`'s pages on their track, with what decides which neighbours are mounted beside the page: its rest
+    /// (`settle`), and Home's orb, which forgets any rest while it can be held, so Chat never waits beside Home then
+    /// and no rest from before the orb opened lets Chat mount at the seal.
+    private func track(_ id: GroupID, orbOpen: Bool, metrics: StageMetrics, width: CGFloat, panel: CGFloat) -> some View {
+        let rest: RestKey = RestKey(tab: tab, due: restDue(orbOpen: orbOpen))
+        return PagerTrack(width: width,
+                          index: tab.rawValue,
+                          count: MainTab.allCases.count,
+                          sidebarIndex: MainTab.home.rawValue,
+                          holdLimit: orbOpen ? MainView.homeSwipeLimit : nil,
+                          dropToken: swipeDropToken,
+                          hooks: swipeHooks(id, panel: panel)) {
+            pages(id, metrics: metrics, width: width)
+        }
+        .onChange(of: tab == .home && orbOpen, initial: true) { (_: Bool, open: Bool) in
+            guard open && rested != nil else { return }
+            if paging.underWay && swipeMount == nil {
+                swipeMount = .chat
+            }
+            rested = nil
+        }
+        .task(id: rest) {
+            await settle(rest, in: id)
+        }
+    }
+
     /// The mounted pages, each at its place on the track. Keyed by tab, so a neighbour that becomes the selected
-    /// page stays the same view, its scroll position and state included.
+    /// page stays the same view, its scroll position and state included. Only the selected page takes touches and
+    /// is heard by VoiceOver: a neighbour waits off screen until a swipe brings it into view.
     private func pages(_ id: GroupID, metrics: StageMetrics, width: CGFloat) -> some View {
         ForEach(mountedTabs) { (t: MainTab) in
             tabPage(t, id: id, metrics: metrics)
+                .disabled(t != tab)
+                .accessibilityHidden(t != tab)
                 .pagerSlot(t.rawValue, width: width)
                 .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.identity)
         }
     }
 
-    /// Pages are swapped, not kept alive: the orb, its timers and the calendar never run off screen. The selected
-    /// tab's page, and from when a swipe takes its touch until its track has landed, the neighbour on its side
-    /// (never under Reduce Motion, where nothing slides into view).
+    /// The selected tab's page, and its neighbours beside it once it has rested, so a swipe toward one moves a page
+    /// that is already there; also a neighbour a swipe heads for that isn't (`swipeMount`). Other pages are swapped,
+    /// not kept alive. Home is mounted only as the page or for a swipe toward it, since its orb, its timers and the
+    /// cascade must never run off screen; Chat waits beside it only once its orb can't be held (`track`), since it
+    /// would render with the store at the seal and through the cascade. Under Reduce Motion nothing slides into
+    /// view, so only the page.
     private var mountedTabs: [MainTab] {
-        guard !reduceMotion, case .page(let forward)? = pageSwipe,
-              let neighbour: MainTab = forward ? tab.next : tab.previous else { return [tab] }
-        return [tab, neighbour]
+        guard !reduceMotion else { return [tab] }
+        var out: [MainTab] = []
+        for t in MainTab.allCases where t == tab || t == swipeMount || restsBeside(t) {
+            out.append(t)
+        }
+        return out
     }
 
+    /// A neighbour of the selected tab, other than Home, mounted at rest: either one once the tab has rested, and
+    /// until then each one that was mounted beside the tab that rested last, the page a swipe has just left included.
+    private func restsBeside(_ t: MainTab) -> Bool {
+        guard t != .home, t.isNeighbour(of: tab), let place: RestPlace = rested, place.id == shownID else { return false }
+        return t == place.tab || t.isNeighbour(of: place.tab)
+    }
+
+    /// Each page behind `ShellPage`, with what it draws from besides the store: a shell render that changes none of
+    /// it leaves the page alone.
     @ViewBuilder
     private func tabPage(_ t: MainTab, id: GroupID, metrics: StageMetrics) -> some View {
+        let token: Int = topTokens[t] ?? 0
         switch t {
         case .home:
-            StageScreen(id: id, roomDimmed: $roomDimmed, metrics: metrics, topToken: topToken, actions: stageActions(id))
+            ShellPage(PageInputs(id: id, metrics: metrics, topToken: token, roomDimmed: roomDimmed),
+                      page: StageScreen(id: id, roomDimmed: $roomDimmed, metrics: metrics, topToken: token,
+                                        actions: stageActions(id)))
+                .equatable()
         case .chat:
-            ChatPage(id: id, topToken: topToken, draft: chatDraft(id), covered: sidebarShown, isCurrent: tab == .chat,
-                     actions: chatActions(id))
+            let covered: Bool = sidebarShown || tab != .chat
+            ShellPage(PageInputs(id: id, topToken: token, covered: covered, isCurrent: tab == .chat),
+                      page: ChatPage(id: id, topToken: token, draft: chatDraft(id), covered: covered,
+                                     isCurrent: tab == .chat, actions: chatActions(id)))
+                .equatable()
         case .streak:
-            StreakPage(id: id, metrics: metrics, topToken: topToken, onJoin: { presenter.present(.vow(id), from: .screen) })
+            ShellPage(PageInputs(id: id, metrics: metrics, topToken: token),
+                      page: StreakPage(id: id, metrics: metrics, topToken: token,
+                                       onJoin: { presenter.present(.vow(id), from: .screen) }))
+                .equatable()
         case .activity:
-            ActivityPage(id: id, topToken: topToken)
+            ShellPage(PageInputs(id: id, topToken: token), page: ActivityPage(id: id, topToken: token))
+                .equatable()
         case .group:
-            GroupPage(id: id, topToken: topToken, actions: groupActions(id))
+            ShellPage(PageInputs(id: id, topToken: token), page: GroupPage(id: id, topToken: token, actions: groupActions(id)))
+                .equatable()
         }
     }
 
@@ -317,7 +389,7 @@ struct MainView: View {
     /// horizontal swipe is moving it.
     private var edgeTravel: CGFloat? {
         guard !edgeCancelled else { return nil }
-        return edgeDrag?.horizontalTravel ?? sidebarSwipeTravel
+        return edgeDrag?.horizontalTravel ?? sidebarTravel
     }
 
     /// How much of the panel's width is out: all of it when open, less while a drag pulls it back, what a
@@ -494,7 +566,7 @@ struct MainView: View {
                 return shownID == id && swipesAllowed && edgeDrag == nil && !swipeGuard.overlay
             },
             canContinue: { (toSidebar: Bool) -> Bool in
-                return shownID == id && canOpenSidebar && (toSidebar || (!sidebarOpen && paging))
+                return shownID == id && canOpenSidebar && (toSidebar || (!sidebarOpen && paging.underWay))
             },
             changed: { (swipe: PageSwipe?) in
                 if shownID == id {
@@ -504,6 +576,7 @@ struct MainView: View {
             canLand: { () -> Bool in
                 return shownID == id && swipesAllowed
             },
+            willLand: { (to: Int) in swipeWillLand(in: id, on: to) },
             landed: { (from: Int, to: Int) in swipeLanded(in: id, from: from, to: to) },
             releaseToSidebar: { (value: DragGesture.Value) in openIfPassed(value, panel: panel) },
             heldLong: { swipeGuard.longDragEnded() }
@@ -516,45 +589,82 @@ struct MainView: View {
         canOpenSidebar && !sidebarOpen && !swipeGuard.owesSeal
     }
 
-    /// Written only when it changes: the shell renders as a swipe takes its touch (to mount the neighbour), turns
-    /// round (the other neighbour) and lands, and on every frame only while Home's swipe moves the panel. One
-    /// toward the sidebar let go short springs back as one from the edge does.
+    /// What the track reports. The shell renders only for what it draws: a neighbour to mount (`pageSwipeHeads`), and
+    /// the panel on every change of Home's swipe toward the sidebar, which springs back as one from the edge does when
+    /// let go short.
     private func pageSwipeChanged(_ swipe: PageSwipe?) {
-        guard swipe != pageSwipe else { return }
-        if swipe == nil, case .sidebar? = pageSwipe {
-            withAnimation(Anim.sidebarIn) {
-                pageSwipe = nil
+        switch swipe {
+        case .page(let forward)?:
+            pageSwipeHeads(forward: forward)
+        case .sidebar(let travel)?:
+            if sidebarTravel != travel {
+                sidebarTravel = travel
             }
-            return
+        case nil:
+            swipeEnded()
         }
-        pageSwipe = swipe
+    }
+
+    /// A page swipe took its touch or turned round: it is under way, toward the next page or the previous one. A
+    /// neighbour already mounted beside the page needs nothing, so the swipe renders nothing here; one that isn't
+    /// (Home, or one reached before the page has rested) is mounted now, and stays until the swipe is over.
+    private func pageSwipeHeads(forward: Bool) {
+        let began: Bool = !paging.underWay
+        paging.underWay = true
+        if !reduceMotion, let neighbour: MainTab = forward ? tab.next : tab.previous, !mountedTabs.contains(neighbour) {
+            swipeMount = neighbour
+        }
+        if began {
+            syncBusy()
+        }
+    }
+
+    /// Group `id`'s swipe was let go toward the tab at place `to`: the tab bar shows it selected now, as the track
+    /// sets off, rather than once the spring has come to rest.
+    private func swipeWillLand(in id: GroupID, on to: Int) {
+        guard shownID == id, paging.underWay, let target: MainTab = MainTab(rawValue: to) else { return }
+        highlight.target = target
     }
 
     /// Group `id`'s track has landed, from the tab at place `from` on the tab at `to` (the same one when it sprang
-    /// back): that tab is selected and the page the track left goes, in one update. Every page keeps its place in
-    /// the track, so the swap moves nothing on screen. Only for the swipe still under way: nothing if something
-    /// else ended it first (a tab chosen another way, another group shown).
+    /// back): that tab is selected and the page the track left goes, in one update, as does any highlight. Every page
+    /// keeps its place in the track, so the swap moves nothing on screen. Only for the swipe still under way: nothing
+    /// if something else ended it first (a tab chosen another way, another group shown).
     private func swipeLanded(in id: GroupID, from: Int, to: Int) {
-        guard shownID == id, paging, tab.rawValue == from, let target: MainTab = MainTab(rawValue: to) else { return }
-        pageSwipe = nil
-        tab = target
+        guard shownID == id, paging.underWay, tab.rawValue == from, let target: MainTab = MainTab(rawValue: to) else { return }
+        if tab != target {
+            tab = target
+        }
+        endPaging()
     }
 
-    /// A swipe owns its touch or its track is still landing: automatic presentations wait for it.
-    private var swipeUnderWay: Bool {
-        pageSwipe != nil
+    /// The swipe is over without landing (the system took its touch, its track left, the group changed), or Home's
+    /// toward the sidebar was let go or stopped counting.
+    private func swipeEnded() {
+        endPaging()
+        if sidebarTravel != nil {
+            withAnimation(Anim.sidebarIn) {
+                sidebarTravel = nil
+            }
+        }
     }
 
-    /// A swipe between pages (not Home's toward the sidebar) is under way, its landing included.
-    private var paging: Bool {
-        guard case .page? = pageSwipe else { return false }
-        return true
-    }
-
-    /// How far Home's swipe toward the sidebar has gone; nil while none is under way.
-    private var sidebarSwipeTravel: CGFloat? {
-        guard case .sidebar(let travel)? = pageSwipe else { return nil }
-        return travel
+    /// No page swipe is under way any more: the tab bar shows the page again, a neighbour mounted for the swipe goes
+    /// (in a landing's update, as the tab changes) and automatic presentations may come. Each is written only when
+    /// set, so a swipe that springs back toward a page mounted at rest renders nothing. The presenter hears of it a
+    /// turn later: a quick second swipe lands the first as it takes its touch, and must find the shell still busy.
+    private func endPaging() {
+        guard paging.underWay else { return }
+        paging.underWay = false
+        if highlight.target != nil {
+            highlight.target = nil
+        }
+        if swipeMount != nil {
+            swipeMount = nil
+        }
+        Task { @MainActor in
+            syncBusy()
+        }
     }
 
     // MARK: - Tabs and selection
@@ -566,19 +676,20 @@ struct MainView: View {
     /// tab instead (the track stays where the tab is).
     private func selectTab(_ t: MainTab) {
         guard !roomDimmed, !swipeGuard.owesSeal else { return }
-        if t == tab && !paging {
-            topToken += 1
+        if t == tab && !paging.underWay {
+            topTokens[t, default: 0] += 1
         } else {
             setTab(t)
         }
     }
 
     /// Every way the tab changes but a swipe's own landing, which is always an instant swap: a swipe still under
-    /// way, its landing included, leads nowhere now, so its neighbour goes at once and the track drops it
-    /// (`PagerTrack.swiping`).
+    /// way, its landing included, leads nowhere now, so a neighbour mounted for it goes at once, the tab bar shows
+    /// the tab chosen and the track drops the swipe (`swipeDropToken`), also when the tab chosen is the one it left.
     private func setTab(_ t: MainTab) {
-        if paging {
-            pageSwipe = nil
+        if paging.underWay {
+            endPaging()
+            swipeDropToken += 1
         }
         tab = t
     }
@@ -599,7 +710,7 @@ struct MainView: View {
     /// swipe away from Home is still under way or landing: it ends there.
     private func showHome(_ id: GroupID) {
         select(id)
-        if selected == id && (tab != .home || paging) {
+        if selected == id && (tab != .home || paging.underWay) {
             setTab(.home)
         }
     }
@@ -668,6 +779,19 @@ struct MainView: View {
         roomDimmed || holdingLightID != nil
     }
 
+    /// A hold or the cascade, the sidebar open or following a drag, or a swipe between pages from taking its touch
+    /// until its track has landed: automatic presentations wait.
+    private var shellBusy: Bool {
+        stageBusy || sidebarOpen || edgeDrag != nil || sidebarTravel != nil || paging.underWay
+    }
+
+    /// The presenter hears the whole of `shellBusy` from here: on each change of its observed parts (`shellHooks`), and
+    /// as a page swipe begins or ends, which renders nothing. Never compare `shellBusy` itself in an `onChange`: a
+    /// render mid-swipe would remember a `paging` that has since ended unseen, and the next real edge would match it.
+    private func syncBusy() {
+        presenter.setBusy(shellBusy)
+    }
+
     /// New group, an excuse or proof on its way is up, or about to rise in place of what is up (the proof
     /// sheet after the camera): a reminder tap waits until it has closed, sent or not. Deliberate: closing
     /// it would discard what you typed, picked or shot (and cut a save off before its Invite).
@@ -730,16 +854,10 @@ struct MainView: View {
         )
     }
 
-    /// The group's unsent message; an emptied draft is dropped.
+    /// The group's unsent message, as a binding projected from the shell's state rather than one built on closures,
+    /// whose getter would run (and read every draft) in the shell's body.
     private func chatDraft(_ id: GroupID) -> Binding<String> {
-        return Binding<String>(
-            get: { () -> String in
-                return chatDrafts[id] ?? ""
-            },
-            set: { (text: String) -> Void in
-                chatDrafts[id] = text.isEmpty ? nil : text
-            }
-        )
+        return $chatDrafts[id]
     }
 
     /// Home's Add proof: the chooser (camera or library), or the library at once on a device without a
@@ -814,7 +932,8 @@ struct MainView: View {
     }
 
     /// Every case is a real view: an `EmptyView` body never appears, so the presenter would clear it.
-    /// Covers (`isCover`) fill the screen and take no detents.
+    /// Covers (`isCover`) fill the screen and take no detents. A sheet that focuses its field as it opens (New
+    /// group, the vow, the excuse) starts at full height, since the keyboard would push a medium one up mid-rise.
     @ViewBuilder
     private func sheetBody(_ item: MainSheet) -> some View {
         switch item {
@@ -829,7 +948,7 @@ struct MainView: View {
                 .vowSheet([.medium, .large])
         case .vow(let id):
             VowSheet(id: id)
-                .vowSheet([.medium, .large])
+                .vowSheet([.large])
         case .member(let id, let userID):
             MemberSheet(id: id, userID: userID, onEditVow: { presenter.present(.vow(id), from: .sheet) })
                 .vowSheet([.medium, .large])
@@ -844,7 +963,7 @@ struct MainView: View {
                 .vowSheet([.height(380), .large])
         case .excuse(let id):
             ExcuseSheet(id: id)
-                .vowSheet([.medium, .large])
+                .vowSheet([.large])
         case .camera(let id):
             CameraPicker(onPicked: { (draft: MediaDraft) in proofPicked(draft, in: id) },
                          onLibrary: { presenter.present(.library(id), from: .sheet) })
@@ -979,13 +1098,13 @@ struct MainView: View {
     /// What the presenter and RootView need to know about the shell, and what waited for Home.
     private var shellHooks: some View {
         appearanceHooks
-            .onChange(of: stageBusy || sidebarOpen || edgeDrag != nil || swipeUnderWay, initial: true) { (_: Bool, busy: Bool) in
-                presenter.setBusy(busy)
+            .onChange(of: stageBusy || sidebarOpen || edgeDrag != nil || sidebarTravel != nil, initial: true) {
+                syncBusy()
             }
             .onChange(of: sidebarShown || !presenter.isIdle, initial: true) { (_: Bool, blocked: Bool) in
                 toastBlocked = blocked
             }
-            .onChange(of: edgeDrag == nil && closeDrag == nil && pageSwipe == nil) { (_: Bool, idle: Bool) in
+            .onChange(of: edgeDrag == nil && closeDrag == nil && sidebarTravel == nil) { (_: Bool, idle: Bool) in
                 if idle {
                     dragsEnded()
                 }
@@ -1000,7 +1119,7 @@ struct MainView: View {
             .onChange(of: shownID) {
                 // The shown group changed or went (a refresh can take it mid-swipe): no swipe of its old track can
                 // still be under way, and its own `changed(nil)` is scoped to that group, so it never arrives.
-                pageSwipeChanged(nil)
+                swipeEnded()
             }
             .onChange(of: stageBusy) { (_: Bool, busy: Bool) in
                 if !busy {
@@ -1087,6 +1206,29 @@ struct MainView: View {
             try? await Task.sleep(nanoseconds: pause)
             if Task.isCancelled || store.snapshots[target] == nil { break }
             await store.refresh(target)
+        }
+    }
+
+    /// Whether the page shown may rest now, so its neighbours mount: never under Reduce Motion, nor while a hold, the
+    /// cascade up to its social beat, the sidebar or a sheet coming or going is under way, which a mount would make
+    /// stutter, nor on Home while its orb can still be held.
+    private func restDue(orbOpen: Bool) -> Bool {
+        return !reduceMotion && !stageBusy && !sidebarShown && presenter.isIdle && !(tab == .home && orbOpen)
+    }
+
+    /// A beat after the tab became the page and its rest fell due (`restNanos`; Home's `homeRestNanos`), once no swipe
+    /// is under way, it has rested: its neighbours are mounted beside it, off screen, in a render of their own rather
+    /// than in the one that changed the tab.
+    private func settle(_ key: RestKey, in id: GroupID) async {
+        guard key.due else { return }
+        let pause: UInt64 = key.tab == .home ? MainView.homeRestNanos : MainView.restNanos
+        repeat {
+            try? await Task.sleep(nanoseconds: pause)
+            if Task.isCancelled { return }
+        } while paging.underWay
+        let place: RestPlace = RestPlace(id: id, tab: key.tab)
+        if rested != place {
+            rested = place
         }
     }
 
@@ -1207,6 +1349,88 @@ private struct RefreshKey: Equatable {
     let isChat: Bool
 }
 
+/// The tab that rested as group `id`'s page.
+private struct RestPlace: Equatable {
+    let id: GroupID
+    let tab: MainTab
+}
+
+/// What a track's rest timer runs for: the page shown, and whether its neighbours may be mounted now.
+private struct RestKey: Equatable {
+    let tab: MainTab
+    let due: Bool
+}
+
+// MARK: - Pages
+
+/// A page as the shell built it, compared by its inputs and never by its closures, so a shell render that changes
+/// none of them (the bars, the sidebar sliding or following a drag, a tab change elsewhere, the room dimming for any
+/// page but Home) doesn't run the page's body, and its Settlement pass, again. The closures and bindings it keeps from
+/// an earlier render stay good: the closures reach the shell's state and its references (the store, the presenter),
+/// which read live; Chat's draft is a binding into the shell's state, which renders its readers itself; and the room's
+/// value is one of Home's inputs, so Home's binding to it is never older than it. The page's own state, the store and
+/// the environment (`.disabled` among it) still render it as usual.
+private struct ShellPage<Page: View>: View, Equatable {
+    let inputs: PageInputs
+    let page: Page
+
+    init(_ inputs: PageInputs, page: Page) {
+        self.inputs = inputs
+        self.page = page
+    }
+
+    var body: some View {
+        page
+    }
+
+    static func == (lhs: ShellPage<Page>, rhs: ShellPage<Page>) -> Bool {
+        return lhs.inputs == rhs.inputs
+    }
+}
+
+/// Everything a page draws from besides the store, the environment and its bindings; each page sets what it takes,
+/// and the rest stays at its default, so a change that is another page's never renders it. Chat's draft isn't one:
+/// only the composer reads it, through its binding, which renders the composer alone as you type.
+private struct PageInputs: Equatable {
+    let id: GroupID
+    let metrics: StageMetrics?
+    let topToken: Int
+    /// Home: the room, which it dims.
+    let roomDimmed: Bool
+    /// Chat: the sidebar covers it, and it is the page shown.
+    let covered: Bool
+    let isCurrent: Bool
+
+    init(id: GroupID,
+         metrics: StageMetrics? = nil,
+         topToken: Int,
+         roomDimmed: Bool = false,
+         covered: Bool = false,
+         isCurrent: Bool = false) {
+        self.id = id
+        self.metrics = metrics
+        self.topToken = topToken
+        self.roomDimmed = roomDimmed
+        self.covered = covered
+        self.isCurrent = isCurrent
+    }
+}
+
+/// Each group's unsent Chat message by group; an emptied draft is dropped. Subscripted by group, so the shell can
+/// hand Chat a binding into one draft (`$chatDrafts[id]`) without reading it.
+private struct ChatDrafts {
+    private var texts: [GroupID: String] = [:]
+
+    subscript(id: GroupID) -> String {
+        get {
+            return texts[id] ?? ""
+        }
+        set {
+            texts[id] = newValue.isEmpty ? nil : newValue
+        }
+    }
+}
+
 /// How a drag on the sidebar, its edge or a page (`PagerTrack`) was classified: horizontal only when clearly wider
 /// than tall, so a pull to refresh (`PageScroll`), which takes only drags at least as tall as wide, never shares one.
 enum DragAxis {
@@ -1240,6 +1464,13 @@ private struct ShellDrag: Equatable {
 }
 
 // MARK: - Swiping between tabs
+
+/// A swipe between pages as the shell keeps it, from taking its touch until its track has landed. A reference nothing
+/// observes: the swipe's start and end reach the presenter (`syncBusy`), the hooks and the rest timer without a render.
+@MainActor
+private final class Paging {
+    var underWay: Bool = false
+}
 
 /// What stops a swipe from starting, read only then. A reference, so neither Chat's overlays coming and going
 /// nor a long drag on Home renders the shell.

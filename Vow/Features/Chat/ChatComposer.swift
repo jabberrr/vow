@@ -3,7 +3,7 @@ import SwiftUI
 /// The message bar under the feed: "+" (proof or an excuse) and a growing field with Send inside it, which
 /// shows only once there is something to send. Return inserts a newline; only Send sends. The text is held
 /// to `Records.postTextLimit` without a counter. Its "+" target starts 16 pt in, clear of the shell's edge
-/// swipe. The page lifts it over the keyboard.
+/// swipe. The page owns the focus and lifts the bar over the keyboard.
 struct ChatComposer: View {
     @Binding var draft: String
     let focus: FocusState<Bool>.Binding
@@ -15,6 +15,10 @@ struct ChatComposer: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize: DynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool
+    /// How much further in the typed text starts than "Message" does. The caret stands at the text's very start,
+    /// while a letter's ink begins a little after its own (its side bearing), so with both at one inset the caret
+    /// sat just left of the "M". About a caret's width at the default size, it grows with the text.
+    @ScaledMetric(relativeTo: .body) private var caretInset: CGFloat = Gap.xxs
 
     /// A single line's height: the "+" target's, so the two sit level.
     private static let fieldMinHeight: CGFloat = Gap.hit
@@ -78,7 +82,8 @@ struct ChatComposer: View {
 
     // MARK: - Field
 
-    /// The text is centred in a box at least as tall as the "+" target; the field draws no prompt of its own
+    /// The text is centred in a box at least as tall as the "+" target, starting `caretInset` further in than
+    /// "Message", so the caret stands on the placeholder's first letter; the field draws no prompt of its own
     /// (`placeholder`).
     private var field: some View {
         HStack(alignment: .bottom, spacing: 0) {
@@ -89,11 +94,11 @@ struct ChatComposer: View {
                 .lineLimit(typeSize.isAccessibilitySize ? 1...3 : 1...5)
                 .focused(focus)
                 .accessibilityLabel("Message")
-                .padding(.leading, Gap.m)
+                .padding(.leading, Gap.m + caretInset)
                 .padding(.trailing, canSend ? Gap.xs : Gap.m)
                 .padding(.vertical, Gap.s)
                 .frame(maxWidth: .infinity, minHeight: ChatComposer.fieldMinHeight, alignment: .leading)
-                .overlay(alignment: .leading) {
+                .background(alignment: .leading) {
                     placeholder
                 }
             if canSend {
@@ -105,23 +110,23 @@ struct ChatComposer: View {
         .animation(Anim.standard, value: canSend)
     }
 
-    /// "Message" while the field is empty and not being edited, centred in its box and set where the text starts.
-    /// A vertical field draws its own prompt at the top of its text view, whose reported height needn't be its
-    /// line's (iOS 26 changes it on first focus), so that prompt sat high in the box; drawn here, it is centred
-    /// whatever the text view reports. It goes while you edit, so it never sits beside the caret or over text
-    /// still being composed (a Japanese keyboard's, say). It takes no touches, and VoiceOver hears the field's
-    /// label instead.
-    @ViewBuilder
+    /// "Message" until you type, the field focused or not, as in Messages. It is centred in the box, where a
+    /// single line of the field is too: a vertical field draws its own prompt at the top of its text view, whose
+    /// reported height needn't be its line's (iOS 26 changes it on first focus), so that prompt sat high in the
+    /// box. Text being composed (a Japanese keyboard's, say) is already in the draft, so it hides the placeholder
+    /// too. It goes and comes back at once, never with Send's animation, so it never fades over the first letter
+    /// typed, while moving with the bar as it rides the keyboard. It lies behind the field, so the caret is drawn
+    /// over it, takes no touches, and VoiceOver hears the field's label instead.
     private var placeholder: some View {
-        if draft.isEmpty && !focus.wrappedValue {
-            Text("Message")
-                .font(Fonts.body)
-                .foregroundStyle(Ink.text3)
-                .lineLimit(1)
-                .padding(.horizontal, Gap.m)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        Text("Message")
+            .font(Fonts.body)
+            .foregroundStyle(Ink.text3)
+            .lineLimit(1)
+            .padding(.horizontal, Gap.m)
+            .opacity(draft.isEmpty ? 1 : 0)
+            .animation(nil, value: draft.isEmpty)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     /// Catches taps in the field's padding, so the whole box focuses it.

@@ -55,6 +55,9 @@ final class AppStore {
     private let cache: SnapshotCache = SnapshotCache()
 
     @ObservationIgnored private var refreshingIDs: Set<GroupID> = []
+    /// Groups opened from an invite lately, with when. The shared database's zone listing can lag behind an accepted
+    /// share, so for `joinGrace` a refresh keeps such a group when the listing leaves it out.
+    @ObservationIgnored private var joinedAt: [GroupID: Date] = [:]
     @ObservationIgnored private var refreshAllInFlight: Bool = false
     /// Something asked for a refresh of every group while one ran: it goes round once more.
     @ObservationIgnored private var refreshAllAgain: Bool = false
@@ -119,6 +122,9 @@ final class AppStore {
     static var isRunningUnitTests: Bool {
         return ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
+
+    /// How long a group you've just joined is kept while the zone listing doesn't show it.
+    private static let joinGrace: TimeInterval = 60
 
     func bootstrap() async {
         // Unit tests are hosted in the app without entitlements: never touch CloudKit there.
@@ -255,9 +261,11 @@ final class AppStore {
             }
         }
 
-        // Keep groups that were added locally (create/join) while this refresh was running.
+        // Keep groups that were added locally (create/join) while this refresh was running, and those joined so
+        // lately that the listing may not show them yet.
         let listed: Set<GroupID> = Set(ids)
-        for (id, s) in snapshots where !listed.contains(id) && !keysAtStart.contains(id) {
+        forgetSettledJoins(listed: listed)
+        for (id, s) in snapshots where !listed.contains(id) && (!keysAtStart.contains(id) || joinedAt[id] != nil) {
             fresh[id] = s
         }
         // Drop groups removed locally (leave/delete/reset) while this refresh was running.
@@ -297,6 +305,14 @@ final class AppStore {
         }
     }
 
+    /// A join needs no grace once the listing shows its group, or once `joinGrace` has passed.
+    private func forgetSettledJoins(listed: Set<GroupID>) {
+        let now: Date = Date()
+        for (id, at) in joinedAt where listed.contains(id) || now.timeIntervalSince(at) >= AppStore.joinGrace {
+            joinedAt[id] = nil
+        }
+    }
+
     func refresh(_ id: GroupID) async {
         guard userID != nil, !refreshingIDs.contains(id) else { return }
         refreshingIDs.insert(id)
@@ -308,7 +324,7 @@ final class AppStore {
             if CloudErrors.isGone(error) {
                 if snapshots[id] != nil {
                     removeLocal(id)
-                    toast = "That group no longer exists."
+                    toast = CloudErrors.message(error)
                 }
             } else if !CloudErrors.isNetwork(error) || snapshots[id] == nil {
                 toast = CloudErrors.message(error)
@@ -490,22 +506,32 @@ final class AppStore {
 
     func join(url: URL) async -> Bool {
         lastError = nil
+        let metadata: CKShare.Metadata
         do {
-            let metadata: CKShare.Metadata = try await cloud.shareMetadata(for: url)
-            return await acceptShare(metadata)
+            metadata = try await cloud.shareMetadata(for: url)
         } catch {
-            fail(error)
+            fail(message: CloudErrors.joinMessage(error, accepted: false))
             return false
         }
+        return await acceptShare(metadata)
     }
 
-    /// Accepts an invitation (from a pasted link or from the system via ShareInbox).
+    /// Accepts an invitation (from a pasted link or from the system via ShareInbox). A failure says which step
+    /// failed (`CloudErrors.joinMessage`): finding and accepting the invite, or loading its group afterwards, which
+    /// is given a few seconds, since CloudKit can take a moment to show a zone just joined.
     @discardableResult
     func acceptShare(_ metadata: CKShare.Metadata) async -> Bool {
         guard await ensureUserID() != nil else { return false }
+        let id: GroupID
         do {
-            let id: GroupID = try await cloud.accept(metadata)
-            let s: GroupSnapshot = try await cloud.fetchSnapshot(id)
+            id = try await cloud.accept(metadata)
+        } catch {
+            fail(message: CloudErrors.joinMessage(error, accepted: false))
+            return false
+        }
+        do {
+            let s: GroupSnapshot = try await cloud.fetchJoinedSnapshot(id)
+            joinedAt[id] = Date()
             upsert(merged(s, previous: snapshots[id]))
             lastAcceptedGroup = id
             acceptCount += 1
@@ -516,7 +542,7 @@ final class AppStore {
             }
             return true
         } catch {
-            fail(error)
+            fail(message: CloudErrors.joinMessage(error, accepted: true))
             return false
         }
     }

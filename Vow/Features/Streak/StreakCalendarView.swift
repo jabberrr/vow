@@ -40,7 +40,6 @@ struct StreakCalendarView: View {
     private static let headerHeight: CGFloat = 48
     private static let gridTop: CGFloat = 10
     private static let bottomPadding: CGFloat = 14
-    private static let columns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
 
     var body: some View {
         content(memo.span(group: group, summary: summary, standing: standing, device: Calendar.current, now: now))
@@ -133,12 +132,17 @@ struct StreakCalendarView: View {
         .accessibilityHidden(true)
     }
 
-    /// Blanks before day 1, one cell per date, then blanks up to six full weeks. No column spacing, so a
-    /// run's band passes from cell to cell unbroken.
+    /// Blanks before day 1, one cell per date, then blanks up to six full weeks, row by row in seven equal columns.
+    /// Plain stacks rather than a lazy grid: all 42 cells always show, so laziness only adds work to the first
+    /// render. No column spacing, so a run's band passes from cell to cell unbroken.
     private func grid(_ month: CalendarMonth) -> some View {
-        LazyVGrid(columns: StreakCalendarView.columns, spacing: StreakCalendarView.rowGap) {
-            ForEach(0..<(7 * StreakCalendarView.weeks), id: \.self) { (slot: Int) in
-                slotView(slot, month: month)
+        VStack(spacing: StreakCalendarView.rowGap) {
+            ForEach(0..<StreakCalendarView.weeks, id: \.self) { (week: Int) in
+                HStack(spacing: 0) {
+                    ForEach(0..<7, id: \.self) { (column: Int) in
+                        slotView(week * 7 + column, month: month)
+                    }
+                }
             }
         }
     }
@@ -205,8 +209,11 @@ private struct DayCell: View {
         day.state != .outside || day.isFinal
     }
 
+    /// The ring and the flag share one overlay, the flag on top, and only a cell that joins a neighbour carries a
+    /// band: most cells draw neither, and 42 of them come up at once.
     var body: some View {
-        Text("\(day.dayNumber)")
+        let status: String = spokenStatus
+        return Text("\(day.dayNumber)")
             .font(day.state.isToday ? Fonts.subheadlineSemibold : Fonts.subheadline)
             .monospacedDigit()
             .foregroundStyle(numberColor)
@@ -217,20 +224,20 @@ private struct DayCell: View {
             }
             .overlay {
                 ring
-            }
-            .overlay {
                 flag
             }
             .frame(maxWidth: .infinity)
             .background {
-                band
+                if day.joinsPrevious || day.joinsNext {
+                    band
+                }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(spoken)
-            .accessibilityValue(value)
+            .accessibilityValue(status)
             .accessibilityHidden(!isVowDay)
             .accessibilityShowsLargeContentViewer {
-                Text(value.isEmpty ? spoken : spoken + ", " + value)
+                Text(status.isEmpty ? spoken : spoken + ", " + status)
             }
     }
 
@@ -328,7 +335,7 @@ private struct DayCell: View {
 
     /// "kept", "missed", "excused", "today, your turn", "today, kept", "today, excused", "today, overruled",
     /// "to come", plus ", last day" on the final day.
-    private var value: String {
+    private var spokenStatus: String {
         var text: String
         switch day.state {
         case .kept:

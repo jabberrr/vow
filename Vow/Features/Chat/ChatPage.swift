@@ -29,15 +29,17 @@ struct ChatActions {
 /// view, it is not shown yet (`isCurrent`): a swipe that springs back never counts as a visit. It still opens at
 /// the bottom, since the visit a landing makes is the same view. Chat presents nothing itself; it asks the shell
 /// through `actions`. Its own two overlays, the "+" card and the reaction picker, close when the sidebar covers
-/// the page. The shell ignores the keyboard, so the page lifts its own composer.
+/// the page. The shell ignores the keyboard, so the page lifts its own composer, and only while it is the page
+/// shown: waiting off screen as a neighbour, it ends editing and lets a sheet's keyboard come and go unmoved.
+/// While you type, a tap anywhere in the feed puts the keyboard away.
 struct ChatPage: View {
     let id: GroupID
     /// Bumped when the Chat tab is tapped again: scroll to the latest.
     let topToken: Int
     /// The group's unsent message, kept by the shell across tab and group switches.
     @Binding var draft: String
-    /// Something covers the page (the sidebar): the "+" card and the reaction picker close, as they would
-    /// for a tap outside them.
+    /// Something covers the page (the sidebar), or it is no longer the page shown: the "+" card and the reaction
+    /// picker close, as they would for a tap outside them, so neither waits up for a page kept beside another.
     let covered: Bool
     /// The page shown (Chat is the tab), not the neighbour a swipe toward it has mounted: only then is the chat
     /// marked seen, refreshed and its hold on the touch reported to the shell.
@@ -57,22 +59,31 @@ struct ChatPage: View {
     @State private var plusOpen: Bool = false
     /// The message a long press opened the reaction picker over.
     @State private var reactingID: String? = nil
-    /// The keyboard's top edge in global coordinates while it is up.
-    @State private var keyboardTop: CGFloat? = nil
-    /// The page's bottom edge in global coordinates, which the keyboard's top is measured against.
-    @State private var pageBottom: PageBottom = PageBottom()
+    /// The page's bottom edge and the keyboard's top, which the lift is measured between.
+    @State private var edges: KeyboardEdges = KeyboardEdges()
     /// How far the composer rides up over the keyboard, which covers the tab bar.
     @State private var lift: CGFloat = 0
     @FocusState private var composerFocused: Bool
 
     static let bottomID: String = "chat-bottom"
     private static let hasCamera: Bool = UIImagePickerController.isSourceTypeAvailable(.camera)
-    /// The keyboard's animation when its notification doesn't give one.
+    /// The keyboard's animation when its notification doesn't give one, and a change of focus's.
     private static let keyboardSeconds: Double = 0.25
-    private static let keyboardChanges: NotificationCenter.Publisher =
-        NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
-    private static let keyboardHides: NotificationCenter.Publisher =
-        NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+    /// The "did" change is a backstop, for a frame that settles without a "will" that told of it. A "did" hide
+    /// would add nothing to the "will" one but a late clear, which could drop the bar under a keyboard that a
+    /// quick refocus has brought back.
+    private static let keyboardNames: [Notification.Name] = [UIResponder.keyboardWillChangeFrameNotification,
+                                                              UIResponder.keyboardDidChangeFrameNotification,
+                                                              UIResponder.keyboardWillHideNotification]
+    /// Every keyboard notification, whoever's keyboard it is, delivered on the main queue's next turn rather than
+    /// inside the call that posted it: a field taking focus can post them in the middle of a view update, where a
+    /// change of state may be lost.
+    private static let keyboardNotes: AnyPublisher<Notification, Never> =
+        Publishers.MergeMany(ChatPage.keyboardNames.map { (name: Notification.Name) -> NotificationCenter.Publisher in
+            NotificationCenter.default.publisher(for: name)
+        })
+        .receive(on: DispatchQueue.main)
+        .eraseToAnyPublisher()
 
     init(id: GroupID, topToken: Int, draft: Binding<String>, covered: Bool, isCurrent: Bool, actions: ChatActions) {
         self.id = id
@@ -83,10 +94,15 @@ struct ChatPage: View {
         self.actions = actions
     }
 
+    /// The "+" card or the reaction picker is up.
+    private var overlayOpen: Bool {
+        plusOpen || reactingID != nil
+    }
+
     /// The page keeps its drags from the shell's tab swipes (`ChatActions.overlay`): the "+" card or the
     /// reaction picker is up, or you are typing.
     private var holdsTouch: Bool {
-        plusOpen || reactingID != nil || composerFocused
+        overlayOpen || composerFocused
     }
 
     /// On a per-minute clock, so "Today" and when voting ends roll over on time.
@@ -123,10 +139,8 @@ struct ChatPage: View {
                 closeReactions()
             }
         }
-        .onChange(of: holdsTouch) { (_: Bool, holds: Bool) in
-            if isCurrent {
-                actions.overlay(holds)
-            }
+        .onChange(of: overlayOpen) { (_: Bool, _: Bool) in
+            reportTouch()
         }
         .sensoryFeedback(.impact(weight: .medium), trigger: reactingID) { (_: String?, held: String?) -> Bool in
             held != nil
@@ -147,9 +161,18 @@ struct ChatPage: View {
     }
 
     /// The page stops being shown: another tab or group, a cover over it, or a swipe that left it the neighbour.
+    /// Editing ends, so the keyboard never stays up over another page while this one waits off screen.
     private func left() {
         store.markChatSeen(id)
         actions.overlay(false)
+        composerFocused = false
+    }
+
+    /// The shell hears whether the page holds the touch, while it is the page shown.
+    private func reportTouch() {
+        if isCurrent {
+            actions.overlay(holdsTouch)
+        }
     }
 
     // MARK: - Layout
@@ -166,9 +189,7 @@ struct ChatPage: View {
     }
 
     /// The reader gives the page's size, which never changes while typing (the shell ignores the keyboard). Where
-    /// the page sits on screen, which only the keyboard lift needs, is measured by a reader of its own behind the
-    /// page, into `pageBottom`: read here, it would rebuild the whole page, every row included, on each frame of a
-    /// slide between tabs, where now only that empty reader runs again.
+    /// the page sits on screen is measured behind it (`bottomEdge`), never here.
     private func loaded(_ snapshot: GroupSnapshot, now: Date) -> some View {
         let group: GroupInfo = snapshot.group
         let feed: ChatFeed = memo.feed(snapshot, viewerID: store.userID ?? "", now: now, showsAll: showsAll)
@@ -187,14 +208,6 @@ struct ChatPage: View {
                        proxy: proxy)
             }
         }
-        .background {
-            GeometryReader { (reader: GeometryProxy) in
-                Color.clear
-                    .onChange(of: reader.frame(in: .global).maxY, initial: true) { (_: CGFloat, maxY: CGFloat) in
-                        pageBottom.maxY = maxY
-                    }
-            }
-        }
     }
 
     /// The feed, and the composer (or the join bar) under it. The feed ends at the bar rather than scrolling
@@ -206,6 +219,8 @@ struct ChatPage: View {
         VStack(spacing: 0) {
             feedArea(feed, context: context, proxy: proxy)
                 .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(endsEditing)
                 .overlay(alignment: .bottom) {
                     fade
                 }
@@ -223,6 +238,9 @@ struct ChatPage: View {
             bar(context)
                 .padding(.bottom, lift)
         }
+        .background {
+            bottomEdge(proxy)
+        }
         .overlayPreferenceValue(ReactionAnchorKey.self, alignment: .topLeading) { (anchor: Anchor<CGRect>?) in
             GeometryReader { (geometry: GeometryProxy) in
                 if let target: ReactionTarget = reactionTarget(feed, anchor: anchor, geometry: geometry) {
@@ -231,17 +249,11 @@ struct ChatPage: View {
                 }
             }
         }
-        .onReceive(ChatPage.keyboardChanges) { (note: Notification) in
-            keyboardWillChange(note, hiding: false, proxy: proxy)
-        }
-        .onReceive(ChatPage.keyboardHides) { (note: Notification) in
-            keyboardWillChange(note, hiding: true, proxy: proxy)
+        .onReceive(ChatPage.keyboardNotes) { (note: Notification) in
+            keyboardChanged(note, proxy: proxy)
         }
         .onChange(of: composerFocused) { (_: Bool, focused: Bool) in
-            if focused {
-                closePlus()
-            }
-            updateLift(seconds: ChatPage.keyboardSeconds, proxy: proxy)
+            focusChanged(focused, proxy: proxy)
         }
         .onChange(of: topToken) { _, _ in
             scrollToBottom(proxy, animated: true)
@@ -322,6 +334,18 @@ struct ChatPage: View {
     /// New rows fade in with a small rise; under Reduce Motion they only fade.
     private var arrival: AnyTransition {
         reduceMotion ? AnyTransition.opacity : AnyTransition.opacity.combined(with: .offset(y: 8))
+    }
+
+    /// While you type, a tap anywhere in the feed or its empty state puts the keyboard away, as in Messages; a tap
+    /// on one of the feed's controls (a vote, proof, Earlier, Retry) does too, besides what it does. It runs
+    /// alongside the feed's own gestures, so it never takes a scroll, a tap or the long press on a message from
+    /// them, and a tap is no drag for the shell's swipes. The jump button, the "+" card and the reaction picker lie
+    /// over it and keep their taps to themselves: the jump button takes you to the latest with the keyboard still up.
+    private var endsEditing: some Gesture {
+        TapGesture()
+            .onEnded {
+                endEditing()
+            }
     }
 
     private static func space(_ gap: ChatGap) -> CGFloat {
@@ -666,6 +690,12 @@ struct ChatPage: View {
         }
     }
 
+    /// A tap in the feed (`endsEditing`).
+    private func endEditing() {
+        guard composerFocused else { return }
+        composerFocused = false
+    }
+
     /// A long press on a message: the keyboard and the "+" card go, the message scrolls the least it takes to
     /// show whole (never under the bar, where the scrim's cut-out would lay the composer bare), and the picker
     /// opens over it.
@@ -761,21 +791,51 @@ struct ChatPage: View {
 
     // MARK: - Keyboard
 
-    private func keyboardWillChange(_ note: Notification, hiding: Bool, proxy: ScrollViewProxy) {
+    /// Where the page sits on screen, which only the keyboard lift needs, measured by an empty reader of its own
+    /// into `edges`: read in the page's body, it would rebuild the whole page, every row included, on each frame
+    /// of a slide between tabs, where now only this reader runs again. Its edge never moves in a slide.
+    private func bottomEdge(_ proxy: ScrollViewProxy) -> some View {
+        GeometryReader { (reader: GeometryProxy) in
+            Color.clear
+                .onChange(of: reader.frame(in: .global).maxY, initial: true) { (_: CGFloat, maxY: CGFloat) in
+                    edges.pageBottom = maxY
+                    syncLift(seconds: ChatPage.keyboardSeconds, proxy: proxy)
+                }
+        }
+    }
+
+    /// Keeps the keyboard's top edge from every notification, whoever's keyboard it is and whatever has focus, so
+    /// the lift never waits on one that came before the focus did. A hide clears it; a notification without a
+    /// usable end frame leaves it as it was.
+    private func keyboardChanged(_ note: Notification, proxy: ScrollViewProxy) {
         let info: [AnyHashable: Any] = note.userInfo ?? [:]
         let frame: CGRect? = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         let given: Double? = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue
-        keyboardTop = hiding ? nil : frame?.minY
-        updateLift(seconds: given ?? ChatPage.keyboardSeconds, proxy: proxy)
+        if note.name == UIResponder.keyboardWillHideNotification {
+            edges.keyboardTop = nil
+        } else if let end: CGRect = frame, !end.isEmpty {
+            edges.keyboardTop = end.minY
+        }
+        syncLift(seconds: given ?? ChatPage.keyboardSeconds, proxy: proxy)
     }
 
-    /// The composer rides on the keyboard only while its own field has focus, so a sheet's keyboard never
-    /// moves it. If the bottom of the feed was in view, it stays in view.
-    private func updateLift(seconds: Double, proxy: ScrollViewProxy) {
-        var target: CGFloat = 0
-        if composerFocused, let top: CGFloat = keyboardTop {
-            target = max(0, pageBottom.maxY - top)
+    /// The field gained or lost focus: the "+" card makes way for the keyboard, the shell hears whether the page
+    /// holds the touch, and the composer rides up or settles.
+    private func focusChanged(_ focused: Bool, proxy: ScrollViewProxy) {
+        if focused {
+            closePlus()
         }
+        reportTouch()
+        syncLift(seconds: ChatPage.keyboardSeconds, proxy: proxy)
+    }
+
+    /// The composer rides on the keyboard only while the page is shown and its own field has focus, so neither a
+    /// sheet's keyboard nor one that comes up while the page waits off screen as a neighbour moves anything. It is
+    /// worked out afresh from where the focus and both edges stand on every keyboard notification, every change of
+    /// focus and every move of the page's bottom edge, so it comes out right whatever order they arrive in, a stall
+    /// on the first keyboard included. If the bottom of the feed was in view, it stays in view.
+    private func syncLift(seconds: Double, proxy: ScrollViewProxy) {
+        let target: CGFloat = isCurrent && composerFocused ? edges.overlap : 0
         guard target != lift else { return }
         let follows: Bool = atBottom
         withAnimation(.easeOut(duration: seconds)) {
@@ -807,11 +867,19 @@ private struct ChatContext {
     let size: CGSize
 }
 
-/// The page's bottom edge in global coordinates, for the keyboard lift. Nothing is drawn from it, so it is a
-/// reference: setting it never re-renders the page. It changes only if the page moves up or down, never in a
-/// slide between tabs.
-private final class PageBottom {
-    var maxY: CGFloat = 0
+/// The two edges the keyboard lift is measured between, in global coordinates. Nothing is drawn from them, so they
+/// live in a reference: setting one never re-renders the page, however many notifications a keyboard posts.
+private final class KeyboardEdges {
+    /// The page's bottom edge. It moves only if the page moves up or down, never in a slide between tabs.
+    var pageBottom: CGFloat = 0
+    /// The keyboard's top edge while it is up, whoever's it is; nil while it is down.
+    var keyboardTop: CGFloat? = nil
+
+    /// How far the keyboard reaches over the page: nothing while it is down or off screen.
+    var overlap: CGFloat {
+        guard let top: CGFloat = keyboardTop else { return 0 }
+        return max(0, pageBottom - top)
+    }
 }
 
 /// The feed, rebuilt only when the snapshot, you, the minute or the range changes, so typing or an upload's

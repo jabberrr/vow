@@ -27,6 +27,7 @@
 		268E834A4CAF0E21B744E5EC /* StreakStatsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE11915607546741AF66BAC7 /* StreakStatsCard.swift */; };
 		26F42BB5708554DCC03DF2BD /* Points.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CF44994B230704608A3D485 /* Points.swift */; };
 		2844CB256FC846532BB80B85 /* VoteRuleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5084DC1E9FF1264406384EB8 /* VoteRuleSheet.swift */; };
+		285D3E979A9938DC71A09419 /* CloudEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AFAE665C61C83A9C70CFE18 /* CloudEnvironmentTests.swift */; };
 		2869EB6FA086C408EFDE5776 /* MemberStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 236746B5FF043931CD2C2D4B /* MemberStrip.swift */; };
 		29D85CA9A627E54ACA129B22 /* PostMediaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D841CEEBCA6AED49D99A139B /* PostMediaView.swift */; };
 		2A5B4BBC33611CE5B6E2DEB1 /* OrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D2514E4B8D722C61D068D0D /* OrbView.swift */; };
@@ -126,6 +127,7 @@
 		F1AAED34BB8E14F10BD8499A /* ExcuseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB7604A204D3142DEE43C3A8 /* ExcuseSheet.swift */; };
 		F235AAE1B226C00DC4D7789B /* StageMeta.swift in Sources */ = {isa = PBXBuildFile; fileRef = A122CC5B0C483C4362822A34 /* StageMeta.swift */; };
 		F87F91142D400DD7D27B5E3A /* OrbBurst.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */; };
+		FC38B0C4E90A307496044140 /* CloudEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07C02FA4A94D9053927F8D63 /* CloudEnvironment.swift */; };
 		FD14D65E8CDD952F44099753 /* SnapshotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FE2F8D915FB3EEB44E2E71 /* SnapshotCache.swift */; };
 		FD643944EE7768A46EEEC9ED /* Records.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731E82C164E51CA2F629AB75 /* Records.swift */; };
 		FE18634B72E96555A6202D4D /* ActivityFeedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3E95D8172045A18F0141558 /* ActivityFeedTests.swift */; };
@@ -148,6 +150,7 @@
 		033C9FC1A15EDF07387C98F0 /* ActivityFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeed.swift; sourceTree = "<group>"; };
 		036A0B21F352C0882BFFD07B /* ReminderPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderPlan.swift; sourceTree = "<group>"; };
 		0778C2F2D4487575E3C6F98C /* ReactionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionsTests.swift; sourceTree = "<group>"; };
+		07C02FA4A94D9053927F8D63 /* CloudEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudEnvironment.swift; sourceTree = "<group>"; };
 		0D2426EABBE8442CCBEEEBB9 /* OrbBurst.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbBurst.swift; sourceTree = "<group>"; };
 		0E753FCAB2457FD90863C36E /* CycleChain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleChain.swift; sourceTree = "<group>"; };
 		0F583E1D4F0C3B0397E9DF7D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -201,6 +204,7 @@
 		79E3E52FAC3F90CD4B7E9317 /* StageScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StageScreen.swift; sourceTree = "<group>"; };
 		7A57F1B3006D5E408B0ECA45 /* GroupModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupModels.swift; sourceTree = "<group>"; };
 		7AD0A5DD5829F195BA5D2D4D /* ActivityDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityDayView.swift; sourceTree = "<group>"; };
+		7AFAE665C61C83A9C70CFE18 /* CloudEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudEnvironmentTests.swift; sourceTree = "<group>"; };
 		7D302AE1F8196305C7AABCB9 /* Feedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Feedback.swift; sourceTree = "<group>"; };
 		808E47FC99A50E5D2F3EEAA0 /* MediaViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaViewer.swift; sourceTree = "<group>"; };
 		80F7A8D024C030387668DFF9 /* OrbBody.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbBody.swift; sourceTree = "<group>"; };
@@ -334,6 +338,7 @@
 				F3E95D8172045A18F0141558 /* ActivityFeedTests.swift */,
 				A690E59A411941904F2BE079 /* ChatFeedTests.swift */,
 				264C2DD78AAAE59354819B56 /* ChatTextTests.swift */,
+				7AFAE665C61C83A9C70CFE18 /* CloudEnvironmentTests.swift */,
 				C8C171E6A161440C7CEBA356 /* CycleChainTests.swift */,
 				3230B51A50B1F904EB60E7F1 /* DayClockTests.swift */,
 				553F882F16643292DC50239A /* DayTextTests.swift */,
@@ -453,6 +458,7 @@
 			isa = PBXGroup;
 			children = (
 				8DF7D9B00DDE0825221975AD /* ChangeInbox.swift */,
+				07C02FA4A94D9053927F8D63 /* CloudEnvironment.swift */,
 				9DAE79C1A49FE11F15475BCD /* CloudService.swift */,
 				731E82C164E51CA2F629AB75 /* Records.swift */,
 				AEED0A0627EDFC839E095C00 /* ShareInbox.swift */,
@@ -724,6 +730,7 @@
 				FE18634B72E96555A6202D4D /* ActivityFeedTests.swift in Sources */,
 				E02D310B670A9100EE5F6DBA /* ChatFeedTests.swift in Sources */,
 				B5B4AD796C80E153647A8392 /* ChatTextTests.swift in Sources */,
+				285D3E979A9938DC71A09419 /* CloudEnvironmentTests.swift in Sources */,
 				E21BECAD8137FC36C7EE8B08 /* CycleChainTests.swift in Sources */,
 				4BB6DEBCBA67B2E4FAA85D03 /* DayClockTests.swift in Sources */,
 				CE6CBEC10767D2D86BBD0810 /* DayTextTests.swift in Sources */,
@@ -750,6 +757,7 @@
 				C89BDB7D6BB77FBD3468597E /* RootView.swift in Sources */,
 				EE45A77CD0AB4AD3D011F4A3 /* VowApp.swift in Sources */,
 				7301D539C75BB7424D0B222F /* ChangeInbox.swift in Sources */,
+				FC38B0C4E90A307496044140 /* CloudEnvironment.swift in Sources */,
 				981DDBD11C5D7C0E18B646CC /* CloudService.swift in Sources */,
 				FD643944EE7768A46EEEC9ED /* Records.swift in Sources */,
 				3F6B8BBDE1F5619C77E68D11 /* ShareInbox.swift in Sources */,

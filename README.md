@@ -70,7 +70,7 @@ The app doesn't run queries (it reads each zone's changes), so it needs no index
 
 **End dates.** A vow has no end unless you choose one when you create the group (**End date** → **Last day**). With an end date, Home shows "Day x of y" and the Streak calendar flags the last day. After the last day the vow is finished: nothing settles after it, nobody can check in or send an excuse and no reminders come. The group can still vote on the last day, and you can add proof for it, during the day after; the chat stays open. The end date is the field `Group.endDay`. Members still on an older build of the app keep settling days after the end until they update, so until then their numbers differ.
 
-**Chat.** Every check-in and excuse appears in the group's chat as a card, with any proof inside it, alongside ordinary messages. The other members vote **Counts** (a green ✓) or **Doesn't count** (a red ✕) on each card. The number beside each button is how many voted that way, your vote fills its button green or red, and anyone can see who voted what. Hold a message to react with an emoji or copy it; tap your reaction, or its chip under the message, to take it back.
+**Chat.** Every check-in and excuse appears in the group's chat as a card, with any proof inside it, alongside ordinary messages. The other members vote **Counts** (a green ✓) or **Doesn't count** (a red ✕) on each card. The number beside each button is how many voted that way, your vote fills its button green or red, and anyone can see who voted what. Hold a message to react with an emoji or copy it; tap your reaction, or its chip under the message, to take it back. While you type, tap anywhere in the chat above the message box to put the keyboard away.
 
 **Sync.** When anything in a group changes, CloudKit sends the app a silent push (never a notification) and the app fetches what changed. As a fallback, the open group also refreshes every 5 seconds while **Chat** is shown, and every 15 seconds on the other tabs. Each refresh downloads only what changed since the last one, apart from the first after the app starts. To sync at once, pull down on **Streak**, **Activity** or **Group** (or on the first screen before you have a group); those pages otherwise hold still when they fit on screen.
 
@@ -80,7 +80,7 @@ The app doesn't run queries (it reads each zone's changes), so it needs no index
 
 **Votes.** A check-in or excuse counts unless enough of the other members taking part that day vote **Doesn't count** by the end of the next day. If nobody votes, it counts, and in a group of one nothing can be overruled. How many it takes is the **voting rule** on the **Group** tab: **More than half** (the default), **Everyone**, or **Custom**: a number of the others (1 to 99) that the owner types in, or all of them on a day when fewer take part. A group already on **Two thirds**, which is no longer offered, keeps it until the owner picks another. Only the owner changes it, and a change applies from tomorrow, so a day already being voted on keeps its rule. Until voting on a day closes, that day's points and streaks can still change. You can change your vote until half an hour before voting on that day closes (in a test group, until it closes). In a test group, voting on a day ends when the owner moves two days past it.
 
-**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the last row of the members on a group's **Group** tab). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **≡ → Add group → Join with a link**.
+**Invites.** Every group is a CloudKit record zone in the owner's private database, shared with a zone-wide iCloud share that anyone with the link can join. Any member can send the link with **Invite** (the last row of the members on a group's **Group** tab). When a recipient taps the link, iOS opens Vow (`CKSharingSupported` is set in `Info.plist`), the app accepts the share and then asks for their vow for that group. You can also paste a link with **≡ → Add group → Join with a link**. Invites work only between builds that use the same iCloud environment (see [Troubleshooting](#troubleshooting)).
 
 **Points.** At the end of each day:
 
@@ -105,6 +105,12 @@ No device stores the results. Every device calculates them the same way from the
 
 The app uses an explicit `Vow/Info.plist` (`INFOPLIST_FILE`), which also holds the camera and microphone usage strings for proof (the library uses the system photo picker, which needs no permission) and the `remote-notification` background mode (`UIBackgroundModes`) for CloudKit's silent pushes, and a single 1024×1024 icon in `Vow/Assets.xcassets/AppIcon.appiconset`.
 
+## Troubleshooting
+
+**"Invite not found."** Builds run from Xcode use CloudKit's **Development** environment, and TestFlight and App Store builds use **Production**. The two keep separate data, so a group made in one, and its invite link, can't be found from the other. **≡ → Settings → About → iCloud** shows which one a copy of Vow uses: to share groups, everyone needs the same kind of build. A TestFlight build also needs the schema deployed to Production first (see the warning at the end of [Setup](#setup)), `cloudkit.share` included: Development gets that type when its first group is created.
+
+**"The group didn't load yet."** You're in the group, but iCloud didn't show it within a few seconds. Open the link again in a minute.
+
 ## Layout
 
 ```
@@ -112,7 +118,7 @@ Vow/
   App/         Entry point (VowApp), root view, AppDelegate/SceneDelegate that pass accepted iCloud shares and CloudKit's silent pushes to the app
   Design/      Tokens and components: Sphere, FlameStreak, buttons, fields, sheet scaffold, the page scroll (still when a page fits, with its own pull to refresh); formatters
   Domain/      Pure Swift: group/member/check-in/excuse/vote/post/reaction models, DayClock, Settlement (points and the day-by-day ledger), Review (votes and verdicts), Reactions (chips per message), Points formatting, streak milestones, end date, streak calendar, cycle chain, digest, reminder plan
-  Cloud/       CloudService (CloudKit zones, shares, records, fetches of what changed, push subscriptions, photo and video uploads), record mapping, ShareInbox, ChangeInbox
+  Cloud/       CloudService (CloudKit zones, shares, records, fetches of what changed, push subscriptions, photo and video uploads), CloudEnvironment (which iCloud environment the build uses), record mapping, ShareInbox, ChangeInbox
   Media/       MediaPrep (photos and videos sized for sending), MediaCache (downloaded photos and videos on disk)
   Store/       AppStore (@Observable app state, incl. chat, excuses, votes and reactions), snapshot cache, preferences, Overview, and the stage and chat helpers
   Features/    Main (the shell: top bar, tab bar, the pager that swipes between tabs, sidebar, and the Presenter that shows every sheet and full-screen cover), Stage (Home), Chat (feed, claim cards, messages and reactions, composer), Proof (camera, library, proof sheet, media viewer), Streak, Activity (the day-by-day points), Group (incl. the voting rule and the owner's crown), Menu (Settings, Profile), Sheets (incl. the excuse), Root (onboarding, launch, problem)
@@ -121,7 +127,7 @@ Vow/
   Orb/         OrbView: press-and-hold check-in, ring, burst, haptic
   Sound/       SoundEngine: build-up tone and pop
   Info.plist, Vow.entitlements, Assets.xcassets
-VowTests/      XCTest unit tests (Domain: day math, settlement and its ledger, votes and verdicts, reactions, end date, streak calendar, formatting, streaks, cycle chain, digest, reminder plan; record mapping; vow status; chat feed and wording; Activity's days), hosted in Vow.app
+VowTests/      XCTest unit tests (Domain: day math, settlement and its ledger, votes and verdicts, reactions, end date, streak calendar, formatting, streaks, cycle chain, digest, reminder plan; record mapping; the iCloud environment and join messages; vow status; chat feed and wording; Activity's days), hosted in Vow.app
 Config/        Vow.xcconfig (bundle ID + team, includes Local.xcconfig), Local.xcconfig.example
 project.yml               XcodeGen spec
 scripts/gen_xcodeproj.py  Python generator for Vow.xcodeproj that doesn't need XcodeGen

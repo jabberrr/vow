@@ -7,12 +7,14 @@ import SwiftUI
 /// since every page keeps its place in the track (`pagerSlot`: its tab's index times the width), the swap moves
 /// nothing on screen. The track is clipped to the page area, so nothing moving ever reaches the bars around it.
 ///
-/// The shell builds the pages: the selected one, plus the neighbour on the swipe's side from when a swipe takes its
-/// touch until it has landed (`PageSwipe`). This wrapper holds the live drag and the landing itself, so following
-/// the finger and every frame of a landing re-render only this view: the pages are values the shell built, so no
-/// page's body runs again on any frame. The shell hears only of a swipe taking its touch, turning round and landing.
-/// Mounting and unmounting happen in plain transactions, so nothing inside a page animates or transitions of its
-/// own while the track moves.
+/// The shell builds the pages: the selected one, the neighbours it keeps mounted beside it once it has rested, and a
+/// neighbour a swipe heads for that isn't mounted yet (Home, or one reached before the page has rested), from when the
+/// swipe takes its touch until it is over (`PageSwipe`). This wrapper holds the live drag and the landing itself, so
+/// following the finger and every frame of a landing re-render only this view: the pages are values the shell built,
+/// so no page's body runs again on any frame. The shell hears of a swipe taking its touch, turning round, being let
+/// go toward the neighbour (`SwipeHooks.willLand`, for the tab bar) and landing, and renders only to mount a page or
+/// change the tab. Mounting and unmounting happen in plain transactions, so nothing inside a page animates or
+/// transitions of its own while the track moves.
 ///
 /// It is a swipe surface alongside the pages' own gestures, so their scroll views, pulls to refresh, the orb's hold
 /// and Chat's long presses keep theirs: a drag is decided on its first change, and only a clearly horizontal one
@@ -32,9 +34,10 @@ struct PagerTrack<Content: View>: View {
     /// How long a drag on that page may last and still change the page (`MainView.homeSwipeLimit`, while Home's
     /// orb can still be held); one that lasts longer may also leave a seal owed (`SwipeHooks.heldLong`).
     let holdLimit: TimeInterval?
-    /// The shell still counts a page swipe as under way. Once it doesn't (the tab was chosen another way, or a
-    /// reminder sent you Home), a landing in flight leads nowhere and is dropped.
-    let swiping: Bool
+    /// Bumped when the tab is chosen another way while a page swipe is under way (a tap, or a reminder sending you
+    /// Home): a landing in flight leads nowhere now and is dropped, even one from the very tab chosen. A live drag
+    /// stops counting by itself (`SwipeHooks.canContinue`).
+    let dropToken: Int
     let hooks: SwipeHooks
     /// The mounted pages, each at its place in the track.
     let content: Content
@@ -54,7 +57,7 @@ struct PagerTrack<Content: View>: View {
          count: Int,
          sidebarIndex: Int,
          holdLimit: TimeInterval?,
-         swiping: Bool,
+         dropToken: Int,
          hooks: SwipeHooks,
          @ViewBuilder content: () -> Content) {
         self.width = width
@@ -62,7 +65,7 @@ struct PagerTrack<Content: View>: View {
         self.count = count
         self.sidebarIndex = sidebarIndex
         self.holdLimit = holdLimit
-        self.swiping = swiping
+        self.dropToken = dropToken
         self.hooks = hooks
         self.content = content()
     }
@@ -83,10 +86,8 @@ struct PagerTrack<Content: View>: View {
         .onChange(of: index) {
             landing = nil
         }
-        .onChange(of: swiping) { (_: Bool, under: Bool) in
-            if !under {
-                landing = nil
-            }
+        .onChange(of: dropToken) {
+            landing = nil
         }
         .onDisappear {
             dropLatch()
@@ -181,10 +182,10 @@ struct PagerTrack<Content: View>: View {
     }
 
     /// Mirrors `tracked` for the release, and tells the shell when a swipe takes its touch or turns round (past
-    /// `SwipeMetrics.turnSlop`, so a finger resting near where it began doesn't mount and unmount the neighbours in
-    /// turn); Home's swipe toward the sidebar, on every change. A drag that begins while the track is landing
-    /// lands it first, without animation: the track is already at its destination's place, so only what is left of
-    /// the spring is skipped.
+    /// `SwipeMetrics.turnSlop`, so a finger resting near where it began doesn't send it back and forth between two
+    /// neighbours the shell may have to mount); Home's swipe toward the sidebar, on every change. A drag that begins
+    /// while the track is landing lands it first, without animation: the track is already at its destination's
+    /// place, so only what is left of the spring is skipped.
     private func dragChanged(_ value: DragGesture.Value) {
         guard var current: SwipeLatch = latch else {
             let base: Int = startIndex
@@ -227,7 +228,7 @@ struct PagerTrack<Content: View>: View {
 
     /// Let go: Home's swipe to the right opens the sidebar if it went far enough; any other lands on the
     /// neighbour or back on this page. A drag on Home that lasted `holdLimit`, a swipe or not, tells the shell
-    /// first.
+    /// first. Bound for the neighbour, the shell hears so as the landing starts, and the tab bar moves then.
     private func dragEnded(_ value: DragGesture.Value) {
         guard let current: SwipeLatch = latch else { return }
         latch = nil
@@ -253,6 +254,9 @@ struct PagerTrack<Content: View>: View {
                 hooks.landed(index, index)
             }
             return
+        }
+        if target != index {
+            hooks.willLand(target)
         }
         let travel: CGFloat = value.translation.width - current.origin
         land(from: follow(travel), on: target, velocity: stretches(travel) ? 0 : value.velocity.width)
@@ -372,6 +376,9 @@ struct SwipeHooks {
     let changed: (PageSwipe?) -> Void
     /// Let go far enough: may the tab change now?
     let canLand: () -> Bool
+    /// Let go toward the neighbour: the track is on its way to the tab at this place, and lands there unless the tab
+    /// is chosen another way first. The tab bar shows it selected from now.
+    let willLand: (Int) -> Void
     /// The track has landed: the place of the tab its swipe began on, and of the tab it landed on (the same one
     /// when it sprang back). The shell selects it at once; either way the swipe is over.
     let landed: (Int, Int) -> Void
@@ -383,7 +390,7 @@ struct SwipeHooks {
 
 /// A swipe under way, as the shell needs it: from taking its touch until its track has landed.
 enum PageSwipe: Equatable {
-    /// Toward the next page (`forward`) or the previous one: the side its neighbour is mounted on.
+    /// Toward the next page (`forward`) or the previous one: the neighbour the shell mounts if it isn't already.
     case page(forward: Bool)
     /// Home's swipe to the right, and how far it has gone: the sidebar follows it.
     case sidebar(travel: CGFloat)
@@ -410,7 +417,7 @@ private struct SwipeLatch {
     let origin: CGFloat
     /// To the right on Home: it brings the sidebar out rather than moving the track.
     let toSidebar: Bool
-    /// Toward the next page: the side the shell has mounted the neighbour on.
+    /// Toward the next page: the neighbour it heads for.
     var forward: Bool
     /// Not a swipe (vertical, or begun while one couldn't start), or one that stopped counting.
     var blocked: Bool
@@ -433,7 +440,7 @@ private enum SwipeMetrics {
     static let minimumDistance: CGFloat = 10
     /// Let go past this share of the width (by where the swipe would end), the track goes to the neighbour.
     static let commitShare: CGFloat = 1.0 / 3.0
-    /// How far back past where the swipe began the finger must come before the other neighbour is mounted.
+    /// How far back past where the swipe began the finger must come before the swipe heads for the other neighbour.
     static let turnSlop: CGFloat = 12
     /// The rubber band at the first and last tab: it nears this share of the width without reaching it.
     static let bandShare: CGFloat = 0.1

@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Reminder, testing, about. Opened from the sidebar's Settings row; your name is edited in the Profile sheet.
+/// Reminder, testing, about. Opened from the sidebar's Settings row; your name is edited in the Profile sheet. About
+/// names the iCloud environment this build uses, because invite links don't cross between Xcode builds and others.
 struct SettingsSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(ReminderCenter.self) private var reminders
@@ -171,6 +172,8 @@ struct SettingsSheet: View {
             FieldLabel("About")
             FormGroup {
                 ValueRow("Version", value: versionText)
+                Hairline()
+                ValueRow("iCloud", value: CloudEnvironment.current.label)
             }
             FieldFooter("Groups sync through iCloud. Points only, no real money.")
         }
