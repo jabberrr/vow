@@ -811,8 +811,7 @@ final class AppStore {
         }
     }
 
-    /// False if it wasn't sent. A failed save keeps the message in `failedPosts`, with no toast unless the
-    /// group owner's storage is full.
+    /// False if it wasn't sent. A failed save keeps the message in `failedPosts` and says why (`sendPost`).
     @discardableResult
     func sendMessage(_ text: String, in id: GroupID) async -> Bool {
         let body: String = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -826,8 +825,7 @@ final class AppStore {
     /// yesterday's while the group can still vote on it. The store takes the draft: its files become the
     /// post's cached media at once, so it shows while `uploads` tracks the upload, and they go once it's
     /// sent or discarded. Refused (no proof day, or not an active member): false, the files deleted and no
-    /// toast. A failed save keeps the post in `failedPosts`, with no toast unless the group owner's storage
-    /// is full.
+    /// toast. A failed save keeps the post in `failedPosts` and says why (`sendPost`).
     @discardableResult
     func sendProof(_ draft: MediaDraft, caption: String, in id: GroupID) async -> Bool {
         let body: String = caption.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -925,7 +923,8 @@ final class AppStore {
 
     /// Shows `post` at once, then saves it with the draft's files, which are deleted once it's sent. On
     /// failure the post stays, marked in `failedPosts`, and keeps its draft for a retry, unless a reset or a
-    /// removed group has taken it meanwhile.
+    /// removed group has taken it meanwhile. The toast says why, so "Not sent" is never a mystery: whose
+    /// storage is full, or what iCloud refused. Being offline needs no toast.
     private func sendPost(_ post: PostInfo, draft: MediaDraft?, in id: GroupID) async -> Bool {
         let postID: String = post.id
         inFlightPosts.insert(postID)
@@ -967,9 +966,10 @@ final class AppStore {
             } else if let orphan: MediaDraft = draft {
                 MediaPrep.discard(orphan)
             }
-            // A retry can't help until the owner frees space, so this one failure is said out loud.
             if let full: String = ownerStorageFull(error, in: id) {
                 toast = full
+            } else if !CloudErrors.isNetwork(error) {
+                toast = CloudErrors.message(error)
             }
             return false
         }

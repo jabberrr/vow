@@ -807,7 +807,7 @@ enum CloudErrors {
         default:
             let text: String = detail(error)?.localizedDescription ?? ""
             if text.localizedCaseInsensitiveContains("production schema") {
-                return "The iCloud schema hasn't been deployed to Production yet. Deploy it in the CloudKit Console, or use a build run from Xcode (code \(c.rawValue))."
+                return "iCloud's Production schema lacks this (code \(c.rawValue)). Deploy it in CloudKit Console."
             }
             if text.isEmpty {
                 return "Something went wrong (code \(c.rawValue))."
